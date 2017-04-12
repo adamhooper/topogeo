@@ -204,8 +204,14 @@ impl<Data> TopologyBuilder<Data> {
 
         unsafe {
             (*edge_p).rings.push(ring);
-            (*a).edges.push(edge_p);
-            (*b).edges.push(edge_p);
+            let edge_p_const: *const Edge<Data> = edge_p;
+
+            // O(n) contains() call should be quick in practice since most
+            // nodes have few edges
+            if !(*a).edges.contains(&edge_p_const) {
+                (*a).edges.push(edge_p);
+                (*b).edges.push(edge_p);
+            }
         }
 
         DirectedEdge { edge: edge_p, direction: direction }

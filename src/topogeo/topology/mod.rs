@@ -52,7 +52,7 @@ pub struct DirectedEdge<Data> {
     direction: Direction,
 }
 
-#[derive(Debug)]
+#[derive(Debug,PartialEq,Eq)]
 #[cfg(test)]
 pub enum Direction {
     Forward,
@@ -290,5 +290,28 @@ mod tests {
         assert_eq!(5, topology.edges.len());
         assert_eq!(4, topology.nodes.len());
         assert_eq!(Some(3), topology.nodes.get(&Point(2, 1)).map(|n| n.edges.len()));
+
+        assert_eq!(
+            topology.regions[0].rings[0].directed_edges[1].edge,
+            topology.regions[0].rings[1].directed_edges[2].edge
+        );
+        assert_eq!(Direction::Backward, topology.regions[0].rings[0].directed_edges[1].direction);
+        assert_eq!(Direction::Forward, topology.regions[0].rings[1].directed_edges[2].direction);
+    }
+
+    #[test]
+    fn share_edge_two_regions() {
+        let mut builder = TopologyBuilder::<()>::new();
+
+        builder.add_region((), &[&[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ] ]);
+        builder.add_region((), &[&[ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ] ]);
+
+        let topology = builder.into_topology();
+
+        assert_eq!(5, topology.edges.len());
+        assert_eq!(
+            topology.regions[0].rings[0].directed_edges[1].edge,
+            topology.regions[1].rings[0].directed_edges[2].edge
+        );
     }
 }

@@ -1,0 +1,6 @@
+[package]
+name = "topogeo"
+version = "0.1.0"
+authors = ["Adam Hooper <adam@adamhooper.com>"]
+
+[dependencies]

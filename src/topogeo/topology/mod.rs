@@ -1,8 +1,5 @@
-#[cfg(test)]
 use std::collections::HashMap;
-#[cfg(test)]
 use std::collections::hash_map::Entry;
-#[cfg(test)]
 use std::hash::{Hash, Hasher};
 
 /// A graph of non-overlapping polygons.
@@ -15,23 +12,21 @@ use std::hash::{Hash, Hasher};
 /// The difference between a Node and a mid-Point is that Nodes _may_ represent
 /// the vertex of three or more Rings -- that is, they're contained in three
 /// or more Edges. We won't move them when we simplify().
-#[cfg(test)]
 pub struct Topology<Data> {
-    regions: Vec<Box<Region<Data>>>,
-    nodes: HashMap<Point,Box<Node<Data>>>,
+    pub regions: Vec<Box<Region<Data>>>,
+    pub nodes: HashMap<Point,Box<Node<Data>>>,
     // HashMap's Entry API lets us insert-or-get the key
-    edges: HashMap<Box<Edge<Data>>,()>,
+    pub edges: HashMap<Box<Edge<Data>>,()>,
 }
 
 /// A group of Rings that _means_ something.
 ///
 /// The "data" indicates what it means.
 #[derive(Debug)]
-#[cfg(test)]
 pub struct Region<Data> {
-    data: Data,
-    outer_rings: Vec<Box<Ring<Data>>>,
-    inner_rings: Vec<Box<Ring<Data>>>,
+    pub data: Data,
+    pub outer_rings: Vec<Box<Ring<Data>>>,
+    pub inner_rings: Vec<Box<Ring<Data>>>,
 }
 
 /// A polygon.
@@ -40,21 +35,23 @@ pub struct Region<Data> {
 /// If edges go counter-clockwise, the edges form the _inside_ boundary (i.e.,
 /// this is a "hole" in a polygon).
 #[derive(Debug)]
-#[cfg(test)]
 pub struct Ring<Data> {
-    directed_edges: Vec<DirectedEdge<Data>>,
-    region: *const Region<Data>,
+    pub directed_edges: Vec<DirectedEdge<Data>>,
+    pub region: *const Region<Data>,
 }
 
 #[derive(Debug)]
-#[cfg(test)]
+pub struct InputRing {
+    pub edges: Vec<InputEdge>,
+}
+
+#[derive(Debug)]
 pub struct DirectedEdge<Data> {
-    edge: *const Edge<Data>,
-    direction: Direction,
+    pub edge: *const Edge<Data>,
+    pub direction: Direction,
 }
 
 #[derive(Debug,PartialEq,Eq)]
-#[cfg(test)]
 pub enum Direction {
     Forward,
     Backward
@@ -66,12 +63,16 @@ pub enum Direction {
 /// from top-left Node to bottom-right Node. If you want a directed path, use
 /// DirectedEdge.
 #[derive(Clone, Debug)]
-#[cfg(test)]
 pub struct Edge<Data> {
-    node1: *const Node<Data>,
-    node2: *const Node<Data>,
-    mid_points: Vec<Point>,
-    rings: Vec<*const Ring<Data>>,
+    pub node1: *const Node<Data>,
+    pub node2: *const Node<Data>,
+    pub mid_points: Vec<Point>,
+    pub rings: Vec<*const Ring<Data>>,
+}
+
+#[derive(Debug)]
+pub struct InputEdge {
+    pub points: Vec<Point>,
 }
 
 /// A node in the Topology graph.
@@ -79,10 +80,9 @@ pub struct Edge<Data> {
 /// Each Node forms the beginning and/or end of one or more Edges. (A circular
 /// Edge has the same Node as its start ane end.)
 #[derive(Debug, Eq)]
-#[cfg(test)]
 pub struct Node<Data> {
-    point: Point,
-    edges: Vec<*const Edge<Data>>,
+    pub point: Point,
+    pub edges: Vec<*const Edge<Data>>,
 }
 
 /// A place in space.
@@ -95,10 +95,8 @@ pub struct Node<Data> {
 /// bottom-right, conceptually). That helps us build EdgeSet without checking
 /// two directions.
 #[derive(Clone, Copy, Debug, Hash, Ord, Eq, PartialEq, PartialOrd)]
-#[cfg(test)]
-pub struct Point(u32, u32);
+pub struct Point(pub u32, pub u32);
 
-#[cfg(test)]
 impl<Data> PartialEq for Edge<Data> {
     fn eq(&self, other: &Edge<Data>) -> bool {
         // conditions:
@@ -107,10 +105,8 @@ impl<Data> PartialEq for Edge<Data> {
         self.node1 == other.node1 && self.node2 == other.node2 && self.mid_points == other.mid_points
     }
 }
-#[cfg(test)]
 impl<Data> Eq for Edge<Data> {}
 
-#[cfg(test)]
 impl<Data> Hash for Edge<Data> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.node1.hash(state);
@@ -119,7 +115,6 @@ impl<Data> Hash for Edge<Data> {
     }
 }
 
-#[cfg(test)]
 impl<Data> PartialEq for Node<Data> {
     fn eq(&self, other: &Node<Data>) -> bool {
         // conditions:
@@ -130,24 +125,27 @@ impl<Data> PartialEq for Node<Data> {
     }
 }
 
-#[cfg(test)]
 impl<Data> Hash for Node<Data> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.point.hash(state)
     }
 }
 
-#[cfg(test)]
 pub struct TopologyBuilder<Data> {
     topology: Topology<Data>,
 }
 
-#[cfg(test)]
 fn last_polygon_point_is_same_as_first(points: &[Point]) -> bool {
     points[points.len() - 1] == points[0]
 }
 
-#[cfg(test)]
+fn last_polygon_edge_ends_at_first_edge_start(edges: &[InputEdge]) -> bool {
+    let first = &edges[0];
+    let last = &edges[edges.len() - 1];
+
+    first.points[0] == last.points[last.points.len() - 1]
+}
+
 impl<Data> TopologyBuilder<Data> {
     pub fn new() -> TopologyBuilder<Data> {
         TopologyBuilder::<Data> {
@@ -166,13 +164,33 @@ impl<Data> TopologyBuilder<Data> {
             inner_rings: Vec::with_capacity(inner_points.len()),
         });
 
-        for &edge_points in outer_points {
+        for ref edge_points in outer_points {
             let ring = self.build_ring(&edge_points, &region);
             region.outer_rings.push(ring);
         }
 
-        for &edge_points in inner_points {
+        for ref edge_points in inner_points {
             let ring = self.build_ring(&edge_points, &region);
+            region.inner_rings.push(ring);
+        }
+
+        self.topology.regions.push(region);
+    }
+
+    pub fn add_region_with_rings(&mut self, data: Data, outer_rings: &[InputRing], inner_rings: &[InputRing]) {
+        let mut region = Box::new(Region {
+            data: data,
+            outer_rings: Vec::with_capacity(outer_rings.len()),
+            inner_rings: Vec::with_capacity(inner_rings.len()),
+        });
+
+        for ref input_ring in outer_rings {
+            let ring = self.build_ring_with_input_edges(&input_ring.edges, &region);
+            region.outer_rings.push(ring);
+        }
+
+        for ref input_ring in inner_rings {
+            let ring = self.build_ring_with_input_edges(&input_ring.edges, &region);
             region.inner_rings.push(ring);
         }
 
@@ -190,24 +208,48 @@ impl<Data> TopologyBuilder<Data> {
         });
 
         for two_points in points.windows(2) {
-            let directed_edge = self.build_directed_edge(two_points[0], two_points[1], &*ring);
+            let directed_edge = self.build_directed_edge(two_points, &*ring);
             ring.directed_edges.push(directed_edge);
         }
 
         ring
     }
 
-    fn build_directed_edge(&mut self, p1: Point, p2: Point, ring: *const Ring<Data>) -> DirectedEdge<Data> {
+    /// Returns a Ring, building any Edges and Nodes that are missing.
+    fn build_ring_with_input_edges(&mut self, edges: &[InputEdge], region: &Region<Data>) -> Box<Ring<Data>> {
+        assert!(edges.len() > 0);
+        assert!(last_polygon_edge_ends_at_first_edge_start(edges));
+
+        let mut ring = Box::new(Ring {
+            directed_edges: Vec::with_capacity(edges.len() - 1),
+            region: region,
+        });
+
+        for ref edge in edges {
+            let directed_edge = self.build_directed_edge(&edge.points, &*ring);
+            ring.directed_edges.push(directed_edge);
+        }
+
+        ring
+    }
+
+    fn build_directed_edge(&mut self, points: &[Point], ring: *const Ring<Data>) -> DirectedEdge<Data> {
+        assert!(points.len() >= 2);
+
+        let p1 = points[0];
+        let p2 = points[points.len() - 1];
         let n1: *mut Node<Data> = self.maybe_build_node(p1);
         let n2: *mut Node<Data> = self.maybe_build_node(p2);
+        let mut mid = points[1 .. points.len() - 1].to_vec(); // may be reverse()d
 
         let (a, b, direction) = if p1 <= p2 {
             (n1, n2, Direction::Forward)
         } else {
+            mid.reverse();
             (n2, n1, Direction::Backward)
         };
 
-        let mut maybe_new_edge = Box::new(Edge { node1: a, node2: b, mid_points: vec![], rings: vec![] });
+        let mut maybe_new_edge = Box::new(Edge { node1: a, node2: b, mid_points: mid, rings: vec![] });
         let maybe_new_edge_p: *mut Edge<Data> = &mut *maybe_new_edge;
 
         let edge_p: *mut Edge<Data> = match self.topology.edges.entry(maybe_new_edge) {

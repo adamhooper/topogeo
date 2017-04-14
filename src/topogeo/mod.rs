@@ -1,2 +1,2 @@
-mod topology;
-mod normalize;
+pub mod topology;
+pub mod normalize;

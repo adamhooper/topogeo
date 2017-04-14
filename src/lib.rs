@@ -1,4 +1,4 @@
-mod topogeo;
+pub mod topogeo;
 
 #[cfg(test)]
 mod tests {

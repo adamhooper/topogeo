@@ -30,7 +30,8 @@ pub struct Topology<Data> {
 #[cfg(test)]
 pub struct Region<Data> {
     data: Data,
-    rings: Vec<Box<Ring<Data>>>,
+    outer_rings: Vec<Box<Ring<Data>>>,
+    inner_rings: Vec<Box<Ring<Data>>>,
 }
 
 /// A polygon.
@@ -142,6 +143,11 @@ pub struct TopologyBuilder<Data> {
 }
 
 #[cfg(test)]
+fn last_polygon_point_is_same_as_first(points: &[Point]) -> bool {
+    points[points.len() - 1] == points[0]
+}
+
+#[cfg(test)]
 impl<Data> TopologyBuilder<Data> {
     pub fn new() -> TopologyBuilder<Data> {
         TopologyBuilder::<Data> {
@@ -153,12 +159,21 @@ impl<Data> TopologyBuilder<Data> {
         }
     }
 
-    pub fn add_region(&mut self, data: Data, points: &[&[Point]]) {
-        let mut region = Box::new(Region { data: data, rings: Vec::with_capacity(points.len()) });
+    pub fn add_region(&mut self, data: Data, outer_points: &[&[Point]], inner_points: &[&[Point]]) {
+        let mut region = Box::new(Region {
+            data: data,
+            outer_rings: Vec::with_capacity(outer_points.len()),
+            inner_rings: Vec::with_capacity(inner_points.len()),
+        });
 
-        for &edge_points in points {
+        for &edge_points in outer_points {
             let ring = self.build_ring(&edge_points, &region);
-            region.rings.push(ring);
+            region.outer_rings.push(ring);
+        }
+
+        for &edge_points in inner_points {
+            let ring = self.build_ring(&edge_points, &region);
+            region.inner_rings.push(ring);
         }
 
         self.topology.regions.push(region);
@@ -167,6 +182,7 @@ impl<Data> TopologyBuilder<Data> {
     /// Returns a Ring, building any Edges and Nodes that are missing.
     fn build_ring(&mut self, points: &[Point], region: &Region<Data>) -> Box<Ring<Data>> {
         assert!(points.len() > 2);
+        assert!(last_polygon_point_is_same_as_first(points));
 
         let mut ring = Box::new(Ring {
             directed_edges: Vec::with_capacity(points.len() - 1),
@@ -241,7 +257,7 @@ mod tests {
         builder.add_region(42, &[
            &[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ],
            &[ Point(10, 10), Point(20, 10), Point(10, 20), Point(10, 10) ],
-        ]);
+        ], &[]);
 
         let topology = builder.into_topology();
 
@@ -261,7 +277,7 @@ mod tests {
         builder.add_region((), &[
            &[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ],
            &[ Point(2, 1), Point(3, 1), Point(3, 2), Point(2, 1) ],
-        ]);
+        ], &[]);
 
         let topology = builder.into_topology();
 
@@ -282,7 +298,7 @@ mod tests {
         builder.add_region((), &[
            &[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ],
            &[ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ],
-        ]);
+        ], &[]);
 
         let topology = builder.into_topology();
 
@@ -292,26 +308,41 @@ mod tests {
         assert_eq!(Some(3), topology.nodes.get(&Point(2, 1)).map(|n| n.edges.len()));
 
         assert_eq!(
-            topology.regions[0].rings[0].directed_edges[1].edge,
-            topology.regions[0].rings[1].directed_edges[2].edge
+            topology.regions[0].outer_rings[0].directed_edges[1].edge,
+            topology.regions[0].outer_rings[1].directed_edges[2].edge
         );
-        assert_eq!(Direction::Backward, topology.regions[0].rings[0].directed_edges[1].direction);
-        assert_eq!(Direction::Forward, topology.regions[0].rings[1].directed_edges[2].direction);
+        assert_eq!(Direction::Backward, topology.regions[0].outer_rings[0].directed_edges[1].direction);
+        assert_eq!(Direction::Forward, topology.regions[0].outer_rings[1].directed_edges[2].direction);
     }
 
     #[test]
     fn share_edge_two_regions() {
         let mut builder = TopologyBuilder::<()>::new();
 
-        builder.add_region((), &[&[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ] ]);
-        builder.add_region((), &[&[ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ] ]);
+        builder.add_region((), &[&[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ] ], &[]);
+        builder.add_region((), &[&[ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ] ], &[]);
 
         let topology = builder.into_topology();
 
         assert_eq!(5, topology.edges.len());
         assert_eq!(
-            topology.regions[0].rings[0].directed_edges[1].edge,
-            topology.regions[1].rings[0].directed_edges[2].edge
+            topology.regions[0].outer_rings[0].directed_edges[1].edge,
+            topology.regions[1].outer_rings[0].directed_edges[2].edge
         );
+    }
+
+    #[test]
+    fn inner_hole() {
+        let mut builder = TopologyBuilder::<()>::new();
+
+        builder.add_region(
+            (),
+            &[&[ Point(0, 0), Point(3, 0), Point(0, 3), Point(0, 0) ]],
+            &[&[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ]]
+        );
+
+        let topology = builder.into_topology();
+
+        assert_eq!(6, topology.edges.len());
     }
 }

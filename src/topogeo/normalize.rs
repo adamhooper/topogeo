@@ -71,11 +71,21 @@ fn rotate_island_edge<T>(edge: &NormEdge<T>) -> NormEdge<T> {
     }
 }
 
+/// Returns an equivalend set of Edges, rotated so that the first Edge starts
+/// at the leftmost/topmost Node.
 fn rotate_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
     if edges.len() == 1 {
         vec![ rotate_island_edge(&edges[0]) ]
     } else {
-        edges.clone().to_vec()
+        match edges.iter().enumerate().min_by_key(|&(_, e)| e.points[0]) {
+            None | Some((0, _)) => { edges.clone() }
+            Some((index, _)) => {
+                let mut ret = Vec::<NormEdge<T>>::with_capacity(edges.len());
+                ret.extend_from_slice(&edges[ index .. ]);
+                ret.extend_from_slice(&edges[ .. index ]);
+                ret
+            }
+        }
     }
 }
 
@@ -306,5 +316,40 @@ mod test {
         assert_eq!(1, normal.edges.len());
         let edge: &Edge<_> = normal.edges.keys().next().unwrap();
         assert_eq!(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ], edge_to_points(&edge));
+    }
+
+    #[test]
+    fn rotate_rings() {
+        let mut builder = TopologyBuilder::<u32>::new();
+
+        //  *---*
+        //  |\1/|
+        // /  * |
+        // |  2 |
+        // *----*
+        builder.add_region(
+            1,
+            &[ &[ Point(3, 2), Point(2, 1), Point(4, 1), Point(3, 2) ] ],
+            &[],
+        );
+        builder.add_region(
+            2,
+            &[ &[ Point(3, 2), Point(4, 1), Point(4, 3), Point(1, 3), Point(2, 1), Point(3, 2) ] ],
+            &[],
+        );
+
+        let topology = builder.into_topology();
+        let normal = normalize(&topology);
+
+        assert_eq!(3, normal.edges.len());
+        let ref dedge11 = normal.regions[0].outer_rings[0].directed_edges[0];
+        let ref dedge12 = normal.regions[0].outer_rings[0].directed_edges[1];
+        let ref dedge21 = normal.regions[1].outer_rings[0].directed_edges[0];
+        let ref dedge22 = normal.regions[1].outer_rings[0].directed_edges[1];
+
+        assert_eq!(vec![ Point(2, 1), Point(4, 1) ], edge_to_points(unsafe { &*dedge11.edge }));
+        assert_eq!(vec![ Point(2, 1), Point(3, 2), Point(4, 1) ], edge_to_points(unsafe { &*dedge12.edge }));
+        assert_eq!(dedge12.edge, dedge21.edge);
+        assert_eq!(vec![ Point(2, 1), Point(1, 3), Point(4, 3), Point(4, 1) ], edge_to_points(unsafe { &*dedge22.edge }));
     }
 }

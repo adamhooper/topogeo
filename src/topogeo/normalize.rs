@@ -66,7 +66,33 @@ fn rotate_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
 }
 
 fn join_related_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
-    edges.clone().to_vec()
+    let mut ret = Vec::<NormEdge<T>>::new();
+
+    for ref edge in edges {
+        // Either extend the existing edge or add a new one
+        let extended = match ret.last_mut() {
+            Some(ref mut last) if last.regions == edge.regions => {
+                last.points.extend_from_slice(&edge.points[1..]);
+                true
+            },
+            _ => { false }
+        };
+
+        if !extended {
+            ret.push((*edge).clone());
+        }
+    }
+
+    if ret.len() > 1 {
+        if ret[0].regions == ret.last().unwrap().regions {
+            let mut points = ret.last().unwrap().points.clone();
+            points.extend_from_slice(&ret[0].points[1..]);
+            ret[0].points = points;
+            ret.pop();
+        }
+    }
+
+    ret
 }
 
 fn normalize_region_rings<T>(outer_rings: &[Box<Ring<T>>], inner_rings: &[Box<Ring<T>>]) -> (Vec<InputRing>, Vec<InputRing>) {
@@ -76,13 +102,20 @@ fn normalize_region_rings<T>(outer_rings: &[Box<Ring<T>>], inner_rings: &[Box<Ri
     for ref boxed_outer_ring in outer_rings {
         let ref outer_ring = *boxed_outer_ring;
 
-        let mut edges = Vec::<InputEdge>::new();
+        let mut edges = Vec::<NormEdge<T>>::with_capacity(outer_ring.directed_edges.len());
 
         for ref directed_edge in &outer_ring.directed_edges {
-            edges.push(NormEdge::<T>::with_directed_edge(directed_edge).into_input_edge());
+            edges.push(NormEdge::<T>::with_directed_edge(directed_edge));
         }
 
-        out_outer_rings.push(InputRing { edges: edges });
+        let edges = join_related_edges(&edges);
+
+        let mut input_edges = Vec::<InputEdge>::with_capacity(edges.len());
+        for edge in edges {
+            input_edges.push(edge.into_input_edge());
+        }
+
+        out_outer_rings.push(InputRing { edges: input_edges });
     }
 
     (out_outer_rings, out_inner_rings)
@@ -120,15 +153,23 @@ pub fn normalize<Data: Copy>(topo: &Topology<Data>) -> Topology<Data> {
 
 #[cfg(test)]
 mod test {
-    use topogeo::topology::{Edge, Point, TopologyBuilder};
+    use topogeo::topology::{Direction, Edge, Point, Ring, TopologyBuilder};
     use topogeo::normalize::normalize;
+
+    fn edge_to_points<T>(edge: &Edge<T>) -> Vec<Point> {
+        let mut ret = Vec::<Point>::with_capacity(2 + edge.mid_points.len());
+        ret.push(unsafe { (*edge.node1).point });
+        ret.extend_from_slice(&edge.mid_points);
+        ret.push(unsafe { (*edge.node2).point });
+        ret
+    }
 
     #[test]
     fn flatten_ring() {
         let mut builder = TopologyBuilder::<()>::new();
         builder.add_region(
             (),
-            &[ &[ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ] ],
+            &[ &[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ] ],
             &[],
         );
 
@@ -137,6 +178,72 @@ mod test {
 
         assert_eq!(1, normal.edges.len());
         let edge: &Edge<_> = normal.edges.keys().next().unwrap();
-        assert_eq!(Point(1, 1), unsafe { (*edge.node1).point });
+        assert_eq!(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ], edge_to_points(&edge));
+    }
+
+    #[test]
+    fn flatten_uncommon_edges() {
+        let mut builder = TopologyBuilder::<u32>::new();
+
+        // *--*
+        // | /|
+        // |/ |
+        // *--*
+        builder.add_region(
+            1,
+            &[ &[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ] ],
+            &[],
+        );
+        builder.add_region(
+            2,
+            &[ &[ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ] ],
+            &[],
+        );
+
+        let topology = builder.into_topology();
+        let normal = normalize(&topology);
+
+        assert_eq!(3, normal.edges.len());
+        let edges: Vec<&Edge<_>> = normal.edges.keys().map(|e| &**e).collect();
+        let edge1 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[0].outer_rings[0]) as *const Ring<u32> ]).unwrap();
+        let edge2 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[1].outer_rings[0]) as *const Ring<u32> ]).unwrap();
+        assert_eq!(vec![ Point(1, 2), Point(1, 1), Point(2, 1) ], edge_to_points(&edge1));
+        // edge2 is reversed in its ring.
+        assert_eq!(vec![ Point(1, 2), Point(2, 2), Point(2, 1) ], edge_to_points(&edge2));
+        let edge12 = edges.iter().find(|e| e.rings.len() == 2).unwrap();
+        assert_eq!(vec![ Point(1, 2), Point(2, 1) ], edge_to_points(&edge12));
+    }
+
+    #[test]
+    fn flatten_common_edges() {
+        let mut builder = TopologyBuilder::<u32>::new();
+
+        // *---*
+        // |\1/|
+        // | * |
+        // | 2 |
+        // *---*
+        builder.add_region(
+            1,
+            &[ &[ Point(1, 1), Point(3, 1), Point(2, 2), Point(1, 1) ] ],
+            &[],
+        );
+        builder.add_region(
+            2,
+            &[ &[ Point(1, 1), Point(2, 2), Point(3, 1), Point(3, 3), Point(1, 3), Point(1, 1) ] ],
+            &[],
+        );
+
+        let topology = builder.into_topology();
+        let normal = normalize(&topology);
+
+        assert_eq!(3, normal.edges.len());
+        let edges: Vec<&Edge<_>> = normal.edges.keys().map(|e| &**e).collect();
+        let edge1 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[0].outer_rings[0]) as *const Ring<u32> ]).unwrap();
+        let edge2 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[1].outer_rings[0]) as *const Ring<u32> ]).unwrap();
+        let edge12 = edges.iter().find(|e| e.rings.len() == 2).unwrap();
+        assert_eq!(vec![ Point(1, 1), Point(3, 1) ], edge_to_points(&edge1));
+        assert_eq!(vec![ Point(1, 1), Point(1, 3), Point(3, 3), Point(3, 1) ], edge_to_points(&edge2));
+        assert_eq!(vec![ Point(1, 1), Point(2, 2), Point(3, 1) ], edge_to_points(&edge12));
     }
 }

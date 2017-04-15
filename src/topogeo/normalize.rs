@@ -49,22 +49,65 @@ impl<T> Clone for NormEdge<T> {
     }
 }
 
+/// Returns an equivalent "island" edge (i.e., ring) whose first point is the
+/// leftmost/topmost of the input points.
 fn rotate_island_edge<T>(edge: &NormEdge<T>) -> NormEdge<T> {
     match edge.points.iter().enumerate().min_by_key(|&(_, p)| p) {
         None | Some((0, _)) => { NormEdge { points: edge.points.clone(), regions: edge.regions.clone() } },
         Some((index, _)) => {
+            assert!(edge.points[0] == edge.points[edge.points.len() - 1]);
+
             let mut points = Vec::<Point>::with_capacity(edge.points.len());
-            points.extend_from_slice(&edge.points[index .. edge.points.len()]);
-            points.extend_from_slice(&edge.points[0 .. index]);
+
+            // The _old_ first and last points are identical, so we only want
+            // one of them. The _new_ first and last points must be identical,
+            // too, so we'll use two copies. That's what the `- 1` and `+ 1` are
+            // about.
+            points.extend_from_slice(&edge.points[index .. edge.points.len() - 1]);
+            points.extend_from_slice(&edge.points[0 .. index + 1]);
+
             NormEdge { points: points, regions: edge.regions.clone() }
         }
     }
 }
 
 fn rotate_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
-    edges.clone().to_vec()
+    if edges.len() == 1 {
+        vec![ rotate_island_edge(&edges[0]) ]
+    } else {
+        edges.clone().to_vec()
+    }
 }
 
+/// Returns an equivalent Vec of `NormEdge`s that has the smallest number of
+/// elements possible.
+///
+/// Logic: when two consecutive `NormEdge`s share the same Rings, they are
+/// merged into a single `NormEdge` with all the constituent points. ASCII
+/// art:
+///
+/// ```ascii
+/// *-------*
+/// | a     |
+/// A---B---C
+/// | b     |
+/// E-------D
+/// ```
+///
+/// The input edges `AB` and `BC` are consecutive and they both bisect Regions
+/// `a` and `b`. They will be joined into a single `NormEdge`, `ABC`.
+///
+/// The other edge, which separates `b` from nothing, will be joined into
+/// `CDEA`.
+///
+/// The returned edges preserve input order (i.e., clockwise/counter-clockwise),
+/// but they may be rotated. In this example, given edges
+/// `[ AB, BC, CD, DE, EA ]` arbitrarily rotated,  the return values will be
+/// either `[ ABC, CDEA ]` or `[ CDEA, ABC ]`.
+///
+/// Implementation note: we often call this function twice with the same Edge:
+/// once for `a`'s `Ring` and once for `b`'s. Both calls will join `ABC` in the
+/// same way.
 fn join_related_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
     let mut ret = Vec::<NormEdge<T>>::new();
 
@@ -109,6 +152,7 @@ fn normalize_region_rings<T>(outer_rings: &[Box<Ring<T>>], inner_rings: &[Box<Ri
         }
 
         let edges = join_related_edges(&edges);
+        let edges = rotate_edges(&edges);
 
         let mut input_edges = Vec::<InputEdge>::with_capacity(edges.len());
         for edge in edges {
@@ -165,7 +209,7 @@ mod test {
     }
 
     #[test]
-    fn flatten_ring() {
+    fn flatten_island() {
         let mut builder = TopologyBuilder::<()>::new();
         builder.add_region(
             (),
@@ -245,5 +289,22 @@ mod test {
         assert_eq!(vec![ Point(1, 1), Point(3, 1) ], edge_to_points(&edge1));
         assert_eq!(vec![ Point(1, 1), Point(1, 3), Point(3, 3), Point(3, 1) ], edge_to_points(&edge2));
         assert_eq!(vec![ Point(1, 1), Point(2, 2), Point(3, 1) ], edge_to_points(&edge12));
+    }
+
+    #[test]
+    fn rotate_island() {
+        let mut builder = TopologyBuilder::<()>::new();
+        builder.add_region(
+            (),
+            &[ &[ Point(2, 1), Point(1, 2), Point(1, 1), Point(2, 1) ] ],
+            &[],
+        );
+
+        let topology = builder.into_topology();
+        let normal = normalize(&topology);
+
+        assert_eq!(1, normal.edges.len());
+        let edge: &Edge<_> = normal.edges.keys().next().unwrap();
+        assert_eq!(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ], edge_to_points(&edge));
     }
 }

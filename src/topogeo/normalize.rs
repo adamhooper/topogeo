@@ -1,10 +1,50 @@
+use std::cmp::Ordering;
+use std::collections::btree_map::{BTreeMap,Entry};
 use topogeo::topology::{DirectedEdge, Direction, Edge, InputEdge, InputRing, Point, Region, Ring, Topology, TopologyBuilder};
 
-/// Edge data structure used when normalizing.
+/// Ring data structure used when normalizing.
 #[derive(Debug)]
+struct NormRing<T> {
+    edges: Vec<NormEdge<T>>,
+}
+
+impl<T> PartialOrd for NormRing<T> {
+    fn partial_cmp(&self, other: &NormRing<T>) -> Option<Ordering> {
+        Some(self.edges[0].points[0].cmp(&other.edges[0].points[0]))
+    }
+}
+
+impl<T> Ord for NormRing<T> {
+    fn cmp(&self, other: &NormRing<T>) -> Ordering {
+        self.edges[0].points[0].cmp(&other.edges[0].points[0])
+    }
+}
+
+impl<T> PartialEq for NormRing<T> {
+    fn eq(&self, other: &NormRing<T>) -> bool {
+        self.edges == other.edges
+    }
+}
+
+impl<T> Eq for NormRing<T> {}
+
+impl<T> NormRing<T> {
+    fn into_input_ring(self) -> InputRing {
+        InputRing { edges: self.edges.into_iter().map(|e| e.into_input_edge()).collect() }
+    }
+}
+
+/// Edge data structure used when normalizing.
+#[derive(Debug,Eq)]
 struct NormEdge<T> {
     points: Vec<Point>,
     regions: Vec<*const Region<T>>,
+}
+
+impl<T> PartialEq for NormEdge<T> {
+    fn eq(&self, other: &NormEdge<T>) -> bool {
+        self.points == other.points
+    }
 }
 
 impl<T> NormEdge<T> {
@@ -33,6 +73,11 @@ impl<T> NormEdge<T> {
         let regions: Vec<*const Region<T>> = edge.rings.iter().map(|&r| unsafe { (*r).region }).collect();
 
         NormEdge { points: points, regions: regions }
+    }
+
+    /// `true` iff this NormEdge is between two Rings in the same Region.
+    fn is_redundant(&self) -> bool {
+        self.regions.len() == 2 && self.regions[0] == self.regions[1]
     }
 
     fn into_input_edge(self) -> InputEdge {
@@ -117,7 +162,8 @@ fn rotate_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
 ///
 /// Implementation note: we often call this function twice with the same Edge:
 /// once for `a`'s `Ring` and once for `b`'s. Both calls will join `ABC` in the
-/// same way.
+/// same way (except at a Node joining two rings from the same Region to
+/// a second Region ... which we fix in join_adjacent_rings()).
 fn join_related_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
     let mut ret = Vec::<NormEdge<T>>::new();
 
@@ -148,11 +194,128 @@ fn join_related_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
     ret
 }
 
-fn normalize_region_rings<T>(outer_rings: &[Box<Ring<T>>], inner_rings: &[Box<Ring<T>>]) -> (Vec<InputRing>, Vec<InputRing>) {
-    let mut out_outer_rings = Vec::<InputRing>::with_capacity(outer_rings.len());
-    let mut out_inner_rings = Vec::<InputRing>::with_capacity(inner_rings.len());
+/// Returns an equivalent Vec of `NormRing`s that has the smallest number of
+/// elements possible.
+///
+/// Rationale: if any `NormEdge` `is_redundant()`, it can be removed to join two
+/// `NormRing`s together. ASCII art:
+///
+/// ```ascii
+/// A-------B
+/// |       |
+/// F-------C
+/// |       |
+/// E-------D
+/// ```
+///
+/// Here, `FC` is a redundant edge.
+///
+/// Logic: glob all edges (from all rings) into a single BTreeSet, omitting
+/// redundant edges. Remove the first edge from the set and "follow" it to form
+/// the first Ring. Repeat until the set is empty.
+///
+/// This is O(N lg N); to speed things up, we pass through rings that aren't
+/// redundant and we nix rings that are entirely redundant. (Exercise for the
+/// reader: implement a faster algorithm.)
+///
+/// A bit more on these entirely-redundant "donuts":
+///
+/// ```ascii
+/// A------B
+/// |      |
+/// | E--F |
+/// | |  | |
+/// | H--G |
+/// |      |
+/// D------C
+/// ```
+///
+/// Imagine, in this diagram, `ABCD` has the "hole" `EHGF`, and `EFGH` is also a
+/// ring representing the same region. Since `EFGH` (the area) is entirely
+/// redundant, we'll nix it. Be sure to nix `EHGF` (the hole) as well!
+///
+/// Each input ring must be normalized; all output rings will be normalized as
+/// well.
+///
+/// Input Rings may be in any order; output Rings will be in undefined order.
+fn join_adjacent_rings<T>(rings: &Vec<NormRing<T>>) -> Vec<NormRing<T>> {
+    let mut ret = Vec::<NormRing<T>>::with_capacity(rings.len()); // upper-bound capacity
 
-    for ref boxed_outer_ring in outer_rings {
+    // NormRings are directed. We'll index them by their first Point. There's
+    // no way for two non-redundant edges to leave the same Point.
+    let mut to_merge: BTreeMap<Point, NormEdge<T>> = BTreeMap::new();
+
+    for ref ring in rings {
+        let (redundant, useful): (Vec<_>, Vec<_>) = ring.edges.clone().into_iter().partition(|ref e| e.is_redundant());
+
+        match (redundant.len(), useful.len()) {
+            (0, _) => {
+                // entire ring has no redundant edges: pass it through
+                ret.push(NormRing { edges: useful });
+            }
+            (_, 0) => {
+                // ignore: the entire ring is redundant
+            }
+            _ => {
+                // index the useful edges and ignore the redundant ones
+                for ref edge in useful {
+                    match to_merge.entry(edge.points[0]) {
+                        Entry::Vacant(e) => {
+                            e.insert(edge.clone());
+                        }
+                        Entry::Occupied(e) => {
+                            panic!("Bug/edge case: two distinct edges in the same region are both trying to leave {:?}", e.key());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if to_merge.len() == 0 {
+        // No merging necessary! All rings are normalized and in order.
+        return ret
+    }
+
+    // Now to reconstruct the rings we need to merge....
+    while to_merge.len() > 0 {
+        let start = *to_merge.keys().next().unwrap();
+        let mut end = start;
+
+        let mut edges: Vec<NormEdge<T>> = Vec::new();
+
+        loop {
+            match to_merge.remove(&end) {
+                None => {
+                    panic!("Expected Edge to continue past {:?} when building Ring", end);
+                }
+                Some(edge) => {
+                    end = *edge.points.last().unwrap();
+                    edges.push(edge);
+                }
+            }
+
+            if end == start {
+                // we've reconstructed a ring. to_merge may or may not be empty.
+                break;
+            }
+        }
+
+        let mut edges = join_related_edges(&edges);
+        let edges = rotate_edges(&edges);
+
+        ret.push(NormRing { edges: edges });
+    }
+
+    ret.sort();
+    ret
+}
+
+fn normalize_region_rings<T>(in_outer_rings: &[Box<Ring<T>>], in_inner_rings: &[Box<Ring<T>>]) -> (Vec<InputRing>, Vec<InputRing>) {
+    let mut outer_rings = Vec::<NormRing<T>>::with_capacity(in_outer_rings.len());
+    let mut inner_rings = Vec::<NormRing<T>>::with_capacity(in_inner_rings.len());
+
+    for ref boxed_outer_ring in in_outer_rings {
         let ref outer_ring = *boxed_outer_ring;
 
         let mut edges = Vec::<NormEdge<T>>::with_capacity(outer_ring.directed_edges.len());
@@ -164,15 +327,16 @@ fn normalize_region_rings<T>(outer_rings: &[Box<Ring<T>>], inner_rings: &[Box<Ri
         let edges = join_related_edges(&edges);
         let edges = rotate_edges(&edges);
 
-        let mut input_edges = Vec::<InputEdge>::with_capacity(edges.len());
-        for edge in edges {
-            input_edges.push(edge.into_input_edge());
-        }
-
-        out_outer_rings.push(InputRing { edges: input_edges });
+        outer_rings.push(NormRing::<T> { edges: edges });
     }
 
-    (out_outer_rings, out_inner_rings)
+    let mut outer_rings = join_adjacent_rings(&outer_rings);
+    outer_rings.sort();
+
+    (
+        outer_rings.into_iter().map(|r| r.into_input_ring()).collect(),
+        inner_rings.into_iter().map(|r| r.into_input_ring()).collect(),
+    )
 }
 
 /// Returns a "normalized" copy of the given Topology.
@@ -187,7 +351,8 @@ fn normalize_region_rings<T>(outer_rings: &[Box<Ring<T>>], inner_rings: &[Box<Ri
 ///   consists of a single *Edge*.
 /// * **Ring direction**: Outer rings are clockwise; inner rings are counter-clockwise.
 /// * **Left/Top-most ordering**: the first Edge in each Ring starts with the leftmost
-///   (or in case of a tie, topmost) `Node`.
+///   (or in case of a tie, topmost) `Node`. The first Ring in each Region starts with
+///   the leftmost or topmost `Node`.
 /// * **Island Node**: An island (or lake) has one Node, and that's the leftmost (or
 ///   in case of a tie, topmost) `Point`.
 pub fn normalize<Data: Copy>(topo: &Topology<Data>) -> Topology<Data> {
@@ -351,5 +516,60 @@ mod test {
         assert_eq!(vec![ Point(2, 1), Point(3, 2), Point(4, 1) ], edge_to_points(unsafe { &*dedge12.edge }));
         assert_eq!(dedge12.edge, dedge21.edge);
         assert_eq!(vec![ Point(2, 1), Point(1, 3), Point(4, 3), Point(4, 1) ], edge_to_points(unsafe { &*dedge22.edge }));
+    }
+
+    #[test]
+    fn nix_redundant_edges() {
+        let mut builder = TopologyBuilder::<()>::new();
+
+        // *--* *--*
+        // | /| | /
+        // |/ | |/
+        // *--* *
+        builder.add_region(
+            (),
+            &[
+                &[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ],
+                &[ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ],
+                &[ Point(3, 1), Point(4, 1), Point(3, 2), Point(3, 1) ],
+            ],
+            &[],
+        );
+
+        let topology = builder.into_topology();
+        let normal = normalize(&topology);
+
+        let ref dedge1 = normal.regions[0].outer_rings[0].directed_edges[0];
+        let ref dedge2 = normal.regions[0].outer_rings[1].directed_edges[0];
+
+        assert_eq!(vec![ Point(1, 1), Point(2, 1), Point(2, 2), Point(1, 2), Point(1, 1) ], edge_to_points(unsafe { &*dedge1.edge }));
+        assert_eq!(vec![ Point(3, 1), Point(4, 1), Point(3, 2), Point(3, 1) ], edge_to_points(unsafe { &*dedge2.edge }));
+    }
+
+    #[test]
+    fn order_rings() {
+        let mut builder = TopologyBuilder::<()>::new();
+
+        let first = vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ];
+        let second = vec![ Point(3, 1), Point(4, 1), Point(3, 2), Point(3, 1) ];
+
+        // *--* *--*
+        // | /  | /
+        // |/   |/
+        // *    *
+        builder.add_region(
+            (),
+            &[ &second, &first ],
+            &[],
+        );
+
+        let topology = builder.into_topology();
+        let normal = normalize(&topology);
+
+        let ref dedge1 = normal.regions[0].outer_rings[0].directed_edges[0];
+        let ref dedge2 = normal.regions[0].outer_rings[1].directed_edges[0];
+
+        assert_eq!(first, edge_to_points(unsafe { &*dedge1.edge }));
+        assert_eq!(second, edge_to_points(unsafe { &*dedge2.edge }));
     }
 }

@@ -1,6 +1,13 @@
 use std::cmp::Ordering;
 use std::collections::btree_map::{BTreeMap,Entry};
 use topogeo::topology::{DirectedEdge, Direction, Edge, InputEdge, InputRing, Point, Region, Ring, Topology, TopologyBuilder};
+use itertools::Itertools;
+
+#[derive(Debug,PartialEq,Eq)]
+enum WindingOrder {
+    Clockwise,
+    CounterClockwise,
+}
 
 /// Ring data structure used when normalizing.
 #[derive(Debug)]
@@ -194,6 +201,41 @@ fn join_related_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
     ret
 }
 
+fn calculate_winding_order<T>(edges: &Vec<NormEdge<T>>) -> WindingOrder {
+    // https://en.wikipedia.org/wiki/Shoelace_formula
+    let mut a: i64 = 0;
+
+    for ref edge in edges {
+        for (p1, p2) in edge.points.iter().tuple_windows() {
+            a += (p1.0 as i64) * (p2.1 as i64) - (p2.0 as i64) * (p1.1 as i64)
+        }
+    }
+
+    assert!(a != 0);
+    if a > 0 {
+        WindingOrder::Clockwise
+    } else {
+        WindingOrder::CounterClockwise
+    }
+}
+
+/// If the given `NormEdge`s form a clockwise ring, return a copy; otherwise,
+/// return a backwards copy.
+fn wind_edges<T>(edges: &Vec<NormEdge<T>>, order: WindingOrder) -> Vec<NormEdge<T>> {
+    if order == calculate_winding_order(edges) {
+        edges.clone()
+    } else {
+        let mut ret: Vec<NormEdge<T>> = Vec::with_capacity(edges.len());
+        for ref edge in edges {
+            let mut new_edge: NormEdge<T> = (*edge).clone();
+            new_edge.points.reverse();
+            ret.push(new_edge);
+        }
+        ret.reverse();
+        ret
+    }
+}
+
 /// Returns an equivalent Vec of `NormRing`s that has the smallest number of
 /// elements possible.
 ///
@@ -325,6 +367,7 @@ fn normalize_region_rings<T>(in_outer_rings: &[Box<Ring<T>>], in_inner_rings: &[
         }
 
         let edges = join_related_edges(&edges);
+        let edges = wind_edges(&edges, WindingOrder::Clockwise);
         let edges = rotate_edges(&edges);
 
         outer_rings.push(NormRing::<T> { edges: edges });
@@ -386,6 +429,11 @@ mod test {
     #[test]
     fn flatten_island() {
         let mut builder = TopologyBuilder::<()>::new();
+
+        // A--B
+        // | /
+        // |/
+        // C
         builder.add_region(
             (),
             &[ &[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ] ],
@@ -571,5 +619,31 @@ mod test {
 
         assert_eq!(first, edge_to_points(unsafe { &*dedge1.edge }));
         assert_eq!(second, edge_to_points(unsafe { &*dedge2.edge }));
+    }
+
+    #[test]
+    fn clockwise_outer_ring() {
+        let mut builder = TopologyBuilder::<()>::new();
+
+        // A--C
+        // | /
+        // |/
+        // B
+        builder.add_region(
+            (),
+            &[ &[ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ] ],
+            &[],
+        );
+
+        let topology = builder.into_topology();
+        let normal = normalize(&topology);
+
+        assert_eq!(1, normal.edges.len());
+        let ref dedge = normal.regions[0].outer_rings[0].directed_edges[0];
+        assert_eq!(Direction::Forward, dedge.direction);
+        assert_eq!(
+            vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ],
+            edge_to_points(unsafe { &*dedge.edge })
+        );
     }
 }

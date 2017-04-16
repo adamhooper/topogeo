@@ -1,13 +1,10 @@
 use std::cmp::Ordering;
 use std::collections::btree_map::{BTreeMap,Entry};
-use topogeo::topology::{DirectedEdge, Direction, Edge, InputEdge, InputRing, Point, Region, Ring, Topology, TopologyBuilder};
 use itertools::Itertools;
 
-#[derive(Debug,PartialEq,Eq)]
-enum WindingOrder {
-    Clockwise,
-    CounterClockwise,
-}
+use topogeo::Point;
+use topogeo::topology::{DirectedEdge, Direction, Edge, InputEdge, InputRing, Region, Ring, Topology, TopologyBuilder};
+use topogeo::winding::WindingOrder;
 
 /// Ring data structure used when normalizing.
 #[derive(Debug)]
@@ -201,7 +198,7 @@ fn join_related_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
     ret
 }
 
-fn calculate_winding_order<T>(edges: &Vec<NormEdge<T>>) -> WindingOrder {
+fn calculate_winding_order_from_edges<T>(edges: &Vec<NormEdge<T>>) -> WindingOrder {
     // https://en.wikipedia.org/wiki/Shoelace_formula
     let mut a: i64 = 0;
 
@@ -222,7 +219,7 @@ fn calculate_winding_order<T>(edges: &Vec<NormEdge<T>>) -> WindingOrder {
 /// If the given `NormEdge`s form a clockwise ring, return a copy; otherwise,
 /// return a backwards copy.
 fn wind_edges<T>(edges: &Vec<NormEdge<T>>, order: WindingOrder) -> Vec<NormEdge<T>> {
-    if order == calculate_winding_order(edges) {
+    if order == calculate_winding_order_from_edges(edges) {
         edges.clone()
     } else {
         let mut ret: Vec<NormEdge<T>> = Vec::with_capacity(edges.len());
@@ -353,33 +350,52 @@ fn join_adjacent_rings<T>(rings: &Vec<NormRing<T>>) -> Vec<NormRing<T>> {
     ret
 }
 
-fn normalize_region_rings<T>(in_outer_rings: &[Box<Ring<T>>], in_inner_rings: &[Box<Ring<T>>]) -> (Vec<InputRing>, Vec<InputRing>) {
-    let mut outer_rings = Vec::<NormRing<T>>::with_capacity(in_outer_rings.len());
-    let inner_rings = Vec::<NormRing<T>>::with_capacity(in_inner_rings.len());
+/// Returns a normalized copy of the given set of outer/inner rings.
+///
+/// Call with WindingOrder::Clockwise on outer rings and CounterClockwise on
+/// inner rings.
+///
+/// Note the tidy cleanup of donuts, even though this function isn't called
+/// with both outer rings and inner rings at the same time (it either gets
+/// all outer rings or all inner rings). For instance:
+///
+/// ```ascii
+/// A------B
+/// |      |
+/// | E--H |
+/// | |  | |
+/// | F--G |
+/// |      |
+/// D------C
+/// ```
+///
+/// If a region has two outer rings `ABCD` and `EHGF`, and one inner ring
+/// ("hole"), `EFGH`, then this function's call to join_adjacent_rings() will
+/// nix `EHGF` when called on outer rings, and it will nix `EFGH` when called
+/// on inner rings (since the edges have two rings and thus two Regions, and
+/// both Regions are identical). Ta-da! The donut is gone.
+fn normalize_region_rings<T>(in_rings: &[Box<Ring<T>>], winding_order: WindingOrder) -> Vec<InputRing> {
+    let mut rings = Vec::<NormRing<T>>::with_capacity(in_rings.len());
 
-    for ref boxed_outer_ring in in_outer_rings {
-        let ref outer_ring = *boxed_outer_ring;
+    for ref boxed_ring in in_rings {
+        let ref in_ring = *boxed_ring;
 
-        let mut edges = Vec::<NormEdge<T>>::with_capacity(outer_ring.directed_edges.len());
+        let mut edges = Vec::<NormEdge<T>>::with_capacity(in_ring.directed_edges.len());
 
-        for ref directed_edge in &outer_ring.directed_edges {
+        for ref directed_edge in &in_ring.directed_edges {
             edges.push(NormEdge::<T>::with_directed_edge(directed_edge));
         }
 
-        let edges = join_related_edges(&edges);
-        let edges = wind_edges(&edges, WindingOrder::Clockwise);
-        let edges = rotate_edges(&edges);
+        edges = join_related_edges(&edges);
+        edges = wind_edges(&edges, winding_order);
+        edges = rotate_edges(&edges);
 
-        outer_rings.push(NormRing::<T> { edges: edges });
+        rings.push(NormRing::<T> { edges: edges });
     }
 
-    let mut outer_rings = join_adjacent_rings(&outer_rings);
-    outer_rings.sort();
-
-    (
-        outer_rings.into_iter().map(|r| r.into_input_ring()).collect(),
-        inner_rings.into_iter().map(|r| r.into_input_ring()).collect(),
-    )
+    rings = join_adjacent_rings(&rings);
+    rings.sort();
+    rings.into_iter().map(|r| r.into_input_ring()).collect()
 }
 
 /// Returns a "normalized" copy of the given Topology.
@@ -402,7 +418,8 @@ pub fn normalize<Data: Copy>(topo: &Topology<Data>) -> Topology<Data> {
     let mut builder = TopologyBuilder::<Data>::new();
 
     for ref region in &topo.regions {
-        let (outer_rings, inner_rings) = normalize_region_rings(&region.outer_rings, &region.inner_rings);
+        let outer_rings = normalize_region_rings(&region.outer_rings, WindingOrder::Clockwise);
+        let inner_rings = normalize_region_rings(&region.inner_rings, WindingOrder::CounterClockwise);
         builder.add_region_with_rings(
             region.data,
             &outer_rings,
@@ -415,7 +432,8 @@ pub fn normalize<Data: Copy>(topo: &Topology<Data>) -> Topology<Data> {
 
 #[cfg(test)]
 mod test {
-    use topogeo::topology::{Direction, Edge, Point, Ring, TopologyBuilder};
+    use topogeo::Point;
+    use topogeo::topology::{Direction, Edge, Ring, TopologyBuilder};
     use topogeo::normalize::normalize;
 
     fn edge_to_points<T>(edge: &Edge<T>) -> Vec<Point> {
@@ -644,6 +662,38 @@ mod test {
         assert_eq!(
             vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ],
             edge_to_points(unsafe { &*dedge.edge })
+        );
+    }
+
+    #[test]
+    fn counter_clockwise_inner_ring() {
+        let mut builder = TopologyBuilder::<()>::new();
+
+        // A----B
+        // |D-E/
+        // ||//
+        // |F/
+        // |/
+        // C
+        builder.add_region(
+            (),
+            &[ &[ Point(1, 1), Point(4, 1), Point(1, 4), Point(1, 1) ] ],
+            &[ &[ Point(2, 2), Point(3, 2), Point(2, 3), Point(2, 2) ] ],
+        );
+
+        let topology = builder.into_topology();
+        let normal = normalize(&topology);
+
+        assert_eq!(2, normal.edges.len());
+
+        let ref dedge1 = normal.regions[0].outer_rings[0].directed_edges[0];
+        assert_eq!(Direction::Forward, dedge1.direction);
+
+        let ref dedge2 = normal.regions[0].inner_rings[0].directed_edges[0];
+        assert_eq!(Direction::Backward, dedge2.direction);
+        assert_eq!(
+            vec![ Point(2, 2), Point(3, 2), Point(2, 3), Point(2, 2) ],
+            edge_to_points(unsafe { &*dedge2.edge })
         );
     }
 }

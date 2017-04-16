@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
+use topogeo::Point;
+use topogeo::winding::{WindingOrder, calculate_winding_order_from_points};
 
 /// A graph of non-overlapping polygons.
 ///
@@ -84,18 +86,6 @@ pub struct Node<Data> {
     pub point: Point,
     pub edges: Vec<*const Edge<Data>>,
 }
-
-/// A place in space.
-///
-/// Maybe this should be a generic type. For us, it's a [longitude,latitude]
-/// pair, scaled up so longitude is from 0 (180°W) to 2^32-1 (180°E) and
-/// latitude is from 0 (90°N) to 2^31-1 (90°S).
-///
-/// Point is comparable so Edge can have a canonical direction (top-left to
-/// bottom-right, conceptually). That helps us build EdgeSet without checking
-/// two directions.
-#[derive(Clone, Copy, Debug, Hash, Ord, Eq, PartialEq, PartialOrd)]
-pub struct Point(pub u32, pub u32);
 
 impl<Data> PartialEq for Edge<Data> {
     fn eq(&self, other: &Edge<Data>) -> bool {
@@ -242,7 +232,7 @@ impl<Data> TopologyBuilder<Data> {
         let n2: *mut Node<Data> = self.maybe_build_node(p2);
         let mut mid = points[1 .. points.len() - 1].to_vec(); // may be reverse()d
 
-        let (a, b, direction) = if p1 <= p2 {
+        let (a, b, direction) = if p1 < p2 || p1 == p2 && calculate_winding_order_from_points(points) == WindingOrder::Clockwise {
             (n1, n2, Direction::Forward)
         } else {
             mid.reverse();

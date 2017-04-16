@@ -696,4 +696,38 @@ mod test {
             edge_to_points(unsafe { &*dedge2.edge })
         );
     }
+
+    #[test]
+    fn nix_donut() {
+        let mut builder = TopologyBuilder::<()>::new();
+
+        // A----B
+        // |D-E/
+        // ||//
+        // |F/
+        // |/
+        // C
+        builder.add_region(
+            (),
+            &[
+                &[ Point(1, 1), Point(4, 1), Point(1, 4), Point(1, 1) ],
+                &[ Point(2, 2), Point(2, 3), Point(3, 2), Point(2, 2) ],
+            ],
+            &[
+                &[ Point(2, 2), Point(3, 2), Point(2, 3), Point(2, 2) ],
+            ],
+        );
+
+        let topology = builder.into_topology();
+        let normal = normalize(&topology);
+
+        assert_eq!(1, normal.edges.len());
+
+        let ref dedge = normal.regions[0].outer_rings[0].directed_edges[0];
+        assert_eq!(Direction::Forward, dedge.direction);
+        assert_eq!(
+            vec![ Point(1, 1), Point(4, 1), Point(1, 4), Point(1, 1) ],
+            edge_to_points(unsafe { &*dedge.edge })
+        );
+    }
 }

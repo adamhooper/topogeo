@@ -1,4 +1,4 @@
-#[macro_use]
+//#[macro_use]
 extern crate itertools;
 
 pub mod topogeo;

@@ -343,8 +343,8 @@ fn join_adjacent_rings<T>(rings: &Vec<NormRing<T>>) -> Vec<NormRing<T>> {
             }
         }
 
-        let mut edges = join_related_edges(&edges);
-        let edges = rotate_edges(&edges);
+        edges = join_related_edges(&edges);
+        edges = rotate_edges(&edges);
 
         ret.push(NormRing { edges: edges });
     }
@@ -355,7 +355,7 @@ fn join_adjacent_rings<T>(rings: &Vec<NormRing<T>>) -> Vec<NormRing<T>> {
 
 fn normalize_region_rings<T>(in_outer_rings: &[Box<Ring<T>>], in_inner_rings: &[Box<Ring<T>>]) -> (Vec<InputRing>, Vec<InputRing>) {
     let mut outer_rings = Vec::<NormRing<T>>::with_capacity(in_outer_rings.len());
-    let mut inner_rings = Vec::<NormRing<T>>::with_capacity(in_inner_rings.len());
+    let inner_rings = Vec::<NormRing<T>>::with_capacity(in_inner_rings.len());
 
     for ref boxed_outer_ring in in_outer_rings {
         let ref outer_ring = *boxed_outer_ring;

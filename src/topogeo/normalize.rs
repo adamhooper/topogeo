@@ -3,8 +3,8 @@ use std::collections::btree_map::{BTreeMap,Entry};
 use itertools::Itertools;
 
 use topogeo::Point;
-use topogeo::topology::{DirectedEdge, Direction, Edge, InputEdge, InputRing, Region, Ring, Topology, TopologyBuilder};
-use topogeo::winding::WindingOrder;
+use topogeo::geo::{ Edge, Ring, Region, WindingOrder };
+use topogeo::topology::{DirectedEdge, Direction, TopoEdge, TopoRegion, TopoRing, Topology, TopologyBuilder};
 
 /// Ring data structure used when normalizing.
 #[derive(Debug)]
@@ -33,8 +33,8 @@ impl<T> PartialEq for NormRing<T> {
 impl<T> Eq for NormRing<T> {}
 
 impl<T> NormRing<T> {
-    fn into_input_ring(self) -> InputRing {
-        InputRing { edges: self.edges.into_iter().map(|e| e.into_input_edge()).collect() }
+    fn into_ring(self) -> Ring {
+        Ring::Edges(self.edges.into_iter().map(|e| e.into_edge()).collect())
     }
 }
 
@@ -42,7 +42,7 @@ impl<T> NormRing<T> {
 #[derive(Debug,Eq)]
 struct NormEdge<T> {
     points: Vec<Point>,
-    regions: Vec<*const Region<T>>,
+    regions: Vec<*const TopoRegion<T>>,
 }
 
 impl<T> PartialEq for NormEdge<T> {
@@ -53,7 +53,7 @@ impl<T> PartialEq for NormEdge<T> {
 
 impl<T> NormEdge<T> {
     fn with_directed_edge(directed_edge: &DirectedEdge<T>) -> NormEdge<T> {
-        let ref edge: &Edge<_> = unsafe { &(*directed_edge.edge) };
+        let ref edge: &TopoEdge<_> = unsafe { &(*directed_edge.edge) };
         let mut mid_points = edge.mid_points.clone();
 
         let (n1, n2) = match directed_edge.direction {
@@ -74,7 +74,7 @@ impl<T> NormEdge<T> {
         points.append(&mut mid_points);
         points.push(p2);
 
-        let regions: Vec<*const Region<T>> = edge.rings.iter().map(|&r| unsafe { (*r).region }).collect();
+        let regions: Vec<*const TopoRegion<T>> = edge.rings.iter().map(|&r| unsafe { (*r).region }).collect();
 
         NormEdge { points: points, regions: regions }
     }
@@ -84,8 +84,8 @@ impl<T> NormEdge<T> {
         self.regions.len() == 2 && self.regions[0] == self.regions[1]
     }
 
-    fn into_input_edge(self) -> InputEdge {
-        InputEdge { points: self.points }
+    fn into_edge(self) -> Edge {
+        Edge(self.points)
     }
 }
 
@@ -374,7 +374,7 @@ fn join_adjacent_rings<T>(rings: &Vec<NormRing<T>>) -> Vec<NormRing<T>> {
 /// nix `EHGF` when called on outer rings, and it will nix `EFGH` when called
 /// on inner rings (since the edges have two rings and thus two Regions, and
 /// both Regions are identical). Ta-da! The donut is gone.
-fn normalize_region_rings<T>(in_rings: &[Box<Ring<T>>], winding_order: WindingOrder) -> Vec<InputRing> {
+fn normalize_region_rings<T>(in_rings: &[Box<TopoRing<T>>], winding_order: WindingOrder) -> Vec<Ring> {
     let mut rings = Vec::<NormRing<T>>::with_capacity(in_rings.len());
 
     for ref boxed_ring in in_rings {
@@ -395,7 +395,7 @@ fn normalize_region_rings<T>(in_rings: &[Box<Ring<T>>], winding_order: WindingOr
 
     rings = join_adjacent_rings(&rings);
     rings.sort();
-    rings.into_iter().map(|r| r.into_input_ring()).collect()
+    rings.into_iter().map(|r| r.into_ring()).collect()
 }
 
 /// Returns a "normalized" copy of the given Topology.
@@ -420,11 +420,11 @@ pub fn normalize<Data: Copy>(topo: &Topology<Data>) -> Topology<Data> {
     for ref region in &topo.regions {
         let outer_rings = normalize_region_rings(&region.outer_rings, WindingOrder::Clockwise);
         let inner_rings = normalize_region_rings(&region.inner_rings, WindingOrder::CounterClockwise);
-        builder.add_region_with_rings(
-            region.data,
-            &outer_rings,
-            &inner_rings,
-        );
+        builder.add_region(&Region {
+            data: region.data,
+            outer_rings: outer_rings,
+            inner_rings: inner_rings,
+        });
     }
 
     builder.into_topology()
@@ -433,10 +433,11 @@ pub fn normalize<Data: Copy>(topo: &Topology<Data>) -> Topology<Data> {
 #[cfg(test)]
 mod test {
     use topogeo::Point;
-    use topogeo::topology::{Direction, Edge, Ring, TopologyBuilder};
+    use topogeo::geo::{Region, Ring};
+    use topogeo::topology::{Direction, TopoEdge, TopoRing, TopologyBuilder};
     use topogeo::normalize::normalize;
 
-    fn edge_to_points<T>(edge: &Edge<T>) -> Vec<Point> {
+    fn edge_to_points<T>(edge: &TopoEdge<T>) -> Vec<Point> {
         let mut ret = Vec::<Point>::with_capacity(2 + edge.mid_points.len());
         ret.push(unsafe { (*edge.node1).point });
         ret.extend_from_slice(&edge.mid_points);
@@ -452,17 +453,17 @@ mod test {
         // | /
         // |/
         // C
-        builder.add_region(
-            (),
-            &[ &[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ] ],
-            &[],
-        );
+        builder.add_region(&Region {
+            data: (),
+            outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ]) ],
+            inner_rings: vec![],
+        });
 
         let topology = builder.into_topology();
         let normal = normalize(&topology);
 
         assert_eq!(1, normal.edges.len());
-        let edge: &Edge<_> = normal.edges.keys().next().unwrap();
+        let edge: &TopoEdge<_> = normal.edges.keys().next().unwrap();
         assert_eq!(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ], edge_to_points(&edge));
     }
 
@@ -474,24 +475,24 @@ mod test {
         // | /|
         // |/ |
         // *--*
-        builder.add_region(
-            1,
-            &[ &[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ] ],
-            &[],
-        );
-        builder.add_region(
-            2,
-            &[ &[ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ] ],
-            &[],
-        );
+        builder.add_region(&Region {
+            data: 1,
+            outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ]) ],
+            inner_rings: vec![],
+        });
+        builder.add_region(&Region {
+            data: 2,
+            outer_rings: vec![ Ring::Points(vec![ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ]) ],
+            inner_rings: vec![],
+        });
 
         let topology = builder.into_topology();
         let normal = normalize(&topology);
 
         assert_eq!(3, normal.edges.len());
-        let edges: Vec<&Edge<_>> = normal.edges.keys().map(|e| &**e).collect();
-        let edge1 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[0].outer_rings[0]) as *const Ring<u32> ]).unwrap();
-        let edge2 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[1].outer_rings[0]) as *const Ring<u32> ]).unwrap();
+        let edges: Vec<&TopoEdge<_>> = normal.edges.keys().map(|e| &**e).collect();
+        let edge1 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[0].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
+        let edge2 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[1].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
         assert_eq!(vec![ Point(1, 2), Point(1, 1), Point(2, 1) ], edge_to_points(&edge1));
         // edge2 is reversed in its ring.
         assert_eq!(vec![ Point(1, 2), Point(2, 2), Point(2, 1) ], edge_to_points(&edge2));
@@ -508,24 +509,24 @@ mod test {
         // | * |
         // | 2 |
         // *---*
-        builder.add_region(
-            1,
-            &[ &[ Point(1, 1), Point(3, 1), Point(2, 2), Point(1, 1) ] ],
-            &[],
-        );
-        builder.add_region(
-            2,
-            &[ &[ Point(1, 1), Point(2, 2), Point(3, 1), Point(3, 3), Point(1, 3), Point(1, 1) ] ],
-            &[],
-        );
+        builder.add_region(&Region {
+            data: 1,
+            outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(3, 1), Point(2, 2), Point(1, 1) ]) ],
+            inner_rings: vec![],
+        });
+        builder.add_region(&Region {
+            data: 2,
+            outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(2, 2), Point(3, 1), Point(3, 3), Point(1, 3), Point(1, 1) ]) ],
+            inner_rings: vec![],
+        });
 
         let topology = builder.into_topology();
         let normal = normalize(&topology);
 
         assert_eq!(3, normal.edges.len());
-        let edges: Vec<&Edge<_>> = normal.edges.keys().map(|e| &**e).collect();
-        let edge1 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[0].outer_rings[0]) as *const Ring<u32> ]).unwrap();
-        let edge2 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[1].outer_rings[0]) as *const Ring<u32> ]).unwrap();
+        let edges: Vec<&TopoEdge<_>> = normal.edges.keys().map(|e| &**e).collect();
+        let edge1 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[0].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
+        let edge2 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[1].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
         let edge12 = edges.iter().find(|e| e.rings.len() == 2).unwrap();
         assert_eq!(vec![ Point(1, 1), Point(3, 1) ], edge_to_points(&edge1));
         assert_eq!(vec![ Point(1, 1), Point(1, 3), Point(3, 3), Point(3, 1) ], edge_to_points(&edge2));
@@ -535,17 +536,17 @@ mod test {
     #[test]
     fn rotate_island() {
         let mut builder = TopologyBuilder::<()>::new();
-        builder.add_region(
-            (),
-            &[ &[ Point(2, 1), Point(1, 2), Point(1, 1), Point(2, 1) ] ],
-            &[],
-        );
+        builder.add_region(&Region {
+            data: (),
+            outer_rings: vec![ Ring::Points(vec![ Point(2, 1), Point(1, 2), Point(1, 1), Point(2, 1) ]) ],
+            inner_rings: vec![],
+        });
 
         let topology = builder.into_topology();
         let normal = normalize(&topology);
 
         assert_eq!(1, normal.edges.len());
-        let edge: &Edge<_> = normal.edges.keys().next().unwrap();
+        let edge: &TopoEdge<_> = normal.edges.keys().next().unwrap();
         assert_eq!(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ], edge_to_points(&edge));
     }
 
@@ -558,16 +559,16 @@ mod test {
         // /  * |
         // |  2 |
         // *----*
-        builder.add_region(
-            1,
-            &[ &[ Point(3, 2), Point(2, 1), Point(4, 1), Point(3, 2) ] ],
-            &[],
-        );
-        builder.add_region(
-            2,
-            &[ &[ Point(3, 2), Point(4, 1), Point(4, 3), Point(1, 3), Point(2, 1), Point(3, 2) ] ],
-            &[],
-        );
+        builder.add_region(&Region {
+            data: 1,
+            outer_rings: vec![ Ring::Points(vec![ Point(3, 2), Point(2, 1), Point(4, 1), Point(3, 2) ]) ],
+            inner_rings: vec![],
+        });
+        builder.add_region(&Region {
+            data: 2,
+            outer_rings: vec![ Ring::Points(vec![ Point(3, 2), Point(4, 1), Point(4, 3), Point(1, 3), Point(2, 1), Point(3, 2) ]) ],
+            inner_rings: vec![],
+        });
 
         let topology = builder.into_topology();
         let normal = normalize(&topology);
@@ -592,15 +593,15 @@ mod test {
         // | /| | /
         // |/ | |/
         // *--* *
-        builder.add_region(
-            (),
-            &[
-                &[ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ],
-                &[ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ],
-                &[ Point(3, 1), Point(4, 1), Point(3, 2), Point(3, 1) ],
+        builder.add_region(&Region {
+            data: (),
+            outer_rings: vec![
+                Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ]),
+                Ring::Points(vec![ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ]),
+                Ring::Points(vec![ Point(3, 1), Point(4, 1), Point(3, 2), Point(3, 1) ]),
             ],
-            &[],
-        );
+            inner_rings: vec![],
+        });
 
         let topology = builder.into_topology();
         let normal = normalize(&topology);
@@ -623,11 +624,11 @@ mod test {
         // | /  | /
         // |/   |/
         // *    *
-        builder.add_region(
-            (),
-            &[ &second, &first ],
-            &[],
-        );
+        builder.add_region(&Region {
+            data: (),
+            outer_rings: vec![ Ring::Points(second.clone()), Ring::Points(first.clone()) ],
+            inner_rings: vec![],
+        });
 
         let topology = builder.into_topology();
         let normal = normalize(&topology);
@@ -647,11 +648,11 @@ mod test {
         // | /
         // |/
         // B
-        builder.add_region(
-            (),
-            &[ &[ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ] ],
-            &[],
-        );
+        builder.add_region(&Region {
+            data: (),
+            outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ]) ],
+            inner_rings: vec![],
+        });
 
         let topology = builder.into_topology();
         let normal = normalize(&topology);
@@ -675,11 +676,11 @@ mod test {
         // |F/
         // |/
         // C
-        builder.add_region(
-            (),
-            &[ &[ Point(1, 1), Point(4, 1), Point(1, 4), Point(1, 1) ] ],
-            &[ &[ Point(2, 2), Point(3, 2), Point(2, 3), Point(2, 2) ] ],
-        );
+        builder.add_region(&Region {
+            data: (),
+            outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(4, 1), Point(1, 4), Point(1, 1) ]) ],
+            inner_rings: vec![ Ring::Points(vec![ Point(2, 2), Point(3, 2), Point(2, 3), Point(2, 2) ]) ],
+        });
 
         let topology = builder.into_topology();
         let normal = normalize(&topology);
@@ -707,16 +708,16 @@ mod test {
         // |F/
         // |/
         // C
-        builder.add_region(
-            (),
-            &[
-                &[ Point(1, 1), Point(4, 1), Point(1, 4), Point(1, 1) ],
-                &[ Point(2, 2), Point(2, 3), Point(3, 2), Point(2, 2) ],
+        builder.add_region(&Region {
+            data: (),
+            outer_rings: vec![
+                Ring::Points(vec![ Point(1, 1), Point(4, 1), Point(1, 4), Point(1, 1) ]),
+                Ring::Points(vec![ Point(2, 2), Point(2, 3), Point(3, 2), Point(2, 2) ]),
             ],
-            &[
-                &[ Point(2, 2), Point(3, 2), Point(2, 3), Point(2, 2) ],
+            inner_rings: vec![
+                Ring::Points(vec![ Point(2, 2), Point(3, 2), Point(2, 3), Point(2, 2) ]),
             ],
-        );
+        });
 
         let topology = builder.into_topology();
         let normal = normalize(&topology);

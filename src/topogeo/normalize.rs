@@ -54,27 +54,14 @@ impl<T> PartialEq for NormEdge<T> {
 impl<T> NormEdge<T> {
     fn with_directed_edge(directed_edge: &DirectedEdge<T>) -> NormEdge<T> {
         let ref edge: &TopoEdge<_> = unsafe { &(*directed_edge.edge) };
-        let mut mid_points = edge.mid_points.clone();
 
-        let (n1, n2) = match directed_edge.direction {
-            Direction::Forward => {
-                (edge.node1, edge.node2)
-            }
-            Direction::Backward => {
-                mid_points.reverse();
-                (edge.node2, edge.node1)
-            }
-        };
-
-        let p1 = unsafe { (*n1).point };
-        let p2 = unsafe { (*n2).point };
-
-        let mut points = Vec::<Point>::with_capacity(2 + mid_points.len());
-        points.push(p1);
-        points.append(&mut mid_points);
-        points.push(p2);
+        let mut points = edge.points.clone();
+        if directed_edge.direction == Direction::Backward {
+            points.reverse();
+        }
 
         let regions: Vec<*const TopoRegion<T>> = edge.rings.iter().map(|&r| unsafe { (*r).region }).collect();
+        assert!(regions.len() <= 2);
 
         NormEdge { points: points, regions: regions }
     }
@@ -438,11 +425,7 @@ mod test {
     use topogeo::normalize::normalize;
 
     fn edge_to_points<T>(edge: &TopoEdge<T>) -> Vec<Point> {
-        let mut ret = Vec::<Point>::with_capacity(2 + edge.mid_points.len());
-        ret.push(unsafe { (*edge.node1).point });
-        ret.extend_from_slice(&edge.mid_points);
-        ret.push(unsafe { (*edge.node2).point });
-        ret
+        edge.points.clone()
     }
 
     #[test]

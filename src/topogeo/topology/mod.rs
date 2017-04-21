@@ -17,7 +17,6 @@ use topogeo::geo::{WindingOrder, Edge, Ring, Region};
 /// or more Edges. We won't move them when we simplify().
 pub struct Topology<Data> {
     pub regions: Vec<Box<TopoRegion<Data>>>,
-    pub nodes: HashMap<Point,Box<Node<Data>>>,
     // HashMap's Entry API lets us insert-or-get the key
     pub edges: HashMap<Box<TopoEdge<Data>>,()>,
 }
@@ -62,53 +61,21 @@ pub enum Direction {
 /// DirectedEdge.
 #[derive(Clone, Debug)]
 pub struct TopoEdge<Data> {
-    pub node1: *const Node<Data>,
-    pub node2: *const Node<Data>,
-    pub mid_points: Vec<Point>,
+    pub points: Vec<Point>,
     pub rings: Vec<*const TopoRing<Data>>,
-}
-
-/// A node in the Topology graph.
-///
-/// Each Node forms the beginning and/or end of one or more Edges. (A circular
-/// TopoEdge has the same Node as its start ane end.)
-#[derive(Debug, Eq)]
-pub struct Node<Data> {
-    pub point: Point,
-    pub edges: Vec<*const TopoEdge<Data>>,
 }
 
 impl<Data> PartialEq for TopoEdge<Data> {
     fn eq(&self, other: &TopoEdge<Data>) -> bool {
-        // conditions:
-        // * both Edges are in the same Topology
-        // * there's only one Node per unique Point in a Topology
-        self.node1 == other.node1 && self.node2 == other.node2 && self.mid_points == other.mid_points
+        // condition: both Edges are in the same Topology
+        self.points == other.points
     }
 }
 impl<Data> Eq for TopoEdge<Data> {}
 
 impl<Data> Hash for TopoEdge<Data> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.node1.hash(state);
-        self.node2.hash(state);
-        self.mid_points.hash(state);
-    }
-}
-
-impl<Data> PartialEq for Node<Data> {
-    fn eq(&self, other: &Node<Data>) -> bool {
-        // conditions:
-        // * there's only one Node per unique Point on a Topology
-        // * we never compare across two Topologies (or if we do, we want two
-        //   Nodes to be Equal iff their Points are equal)
-        self.point == other.point
-    }
-}
-
-impl<Data> Hash for Node<Data> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.point.hash(state)
+        self.points.hash(state);
     }
 }
 
@@ -123,7 +90,6 @@ impl<Data> TopologyBuilder<Data>
         TopologyBuilder::<Data> {
             topology: Topology {
                 regions: vec!(),
-                nodes: HashMap::new(),
                 edges: HashMap::new(),
             }
         }
@@ -169,28 +135,27 @@ impl<Data> TopologyBuilder<Data>
     }
 
     fn build_directed_edge(&mut self, edge: &Edge, ring: *const TopoRing<Data>) -> DirectedEdge<Data> {
-        let ref points = edge.0;
+        let mut points = edge.0.clone();
 
         assert!(points.len() >= 2);
 
         let p1 = points[0];
         let p2 = points[points.len() - 1];
-        let n1: *mut Node<Data> = self.maybe_build_node(p1);
-        let n2: *mut Node<Data> = self.maybe_build_node(p2);
-        let mut mid = points[1 .. points.len() - 1].to_vec(); // may be reverse()d
 
-        let (a, b, direction) = if p1 < p2 || p1 == p2 && Ring::Points(points.clone()).winding_order() == WindingOrder::Clockwise {
-            (n1, n2, Direction::Forward)
+        let direction = if p1 < p2 || (p1 == p2 && Ring::Points(points.clone()).winding_order() == WindingOrder::Clockwise) {
+            Direction::Forward
         } else {
-            mid.reverse();
-            (n2, n1, Direction::Backward)
+            points.reverse();
+            Direction::Backward
         };
 
-        let mut maybe_new_edge = Box::new(TopoEdge { node1: a, node2: b, mid_points: mid, rings: vec![] });
+        let mut maybe_new_edge = Box::new(TopoEdge { points: points, rings: vec![] });
         let maybe_new_edge_p: *mut TopoEdge<Data> = &mut *maybe_new_edge;
 
         let edge_p: *mut TopoEdge<Data> = match self.topology.edges.entry(maybe_new_edge) {
-            Entry::Occupied(entry) => { &**entry.key() as *const TopoEdge<Data> as *mut TopoEdge<Data> }
+            Entry::Occupied(entry) => {
+                &**entry.key() as *const TopoEdge<Data> as *mut TopoEdge<Data>
+            },
             Entry::Vacant(entry) => {
                 entry.insert(());
                 maybe_new_edge_p
@@ -199,25 +164,9 @@ impl<Data> TopologyBuilder<Data>
 
         unsafe {
             (*edge_p).rings.push(ring);
-            let edge_p_const: *const TopoEdge<Data> = edge_p;
-
-            // O(n) contains() call should be quick in practice since most
-            // nodes have few edges
-            if !(*a).edges.contains(&edge_p_const) {
-                (*a).edges.push(edge_p);
-                (*b).edges.push(edge_p);
-            }
         }
 
         DirectedEdge { edge: edge_p, direction: direction }
-    }
-
-    fn maybe_build_node(&mut self, point: Point) -> *mut Node<Data> {
-        let mut node: &mut Box<Node<Data>> = self.topology.nodes
-            .entry(point)
-            .or_insert(Box::new(Node { point: point, edges: vec![] }));
-
-        &mut **node
     }
 
     pub fn into_topology(self) -> Topology<Data> {
@@ -269,8 +218,6 @@ mod tests {
 
         assert_eq!(1, topology.regions.len());
         assert_eq!(6, topology.edges.len());
-        assert_eq!(5, topology.nodes.len());
-        assert_eq!(Some(4), topology.nodes.get(&Point(2, 1)).map(|n| n.edges.len()));
     }
 
     #[test]
@@ -295,7 +242,6 @@ mod tests {
 
         assert_eq!(1, topology.regions.len());
         assert_eq!(5, topology.edges.len());
-        assert_eq!(Some(3), topology.nodes.get(&Point(2, 1)).map(|n| n.edges.len()));
 
         assert_eq!(
             topology.regions[0].outer_rings[0].directed_edges[1].edge,

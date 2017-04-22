@@ -1,7 +1,7 @@
 pub mod geo;
 pub mod topology;
 pub mod normalize;
-//pub mod read;
+pub mod read;
 
 /// A place in space.
 ///

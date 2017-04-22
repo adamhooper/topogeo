@@ -1,3 +1,5 @@
+extern crate byteorder;
+extern crate encoding;
 //#[macro_use]
 extern crate itertools;
 

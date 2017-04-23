@@ -39,11 +39,23 @@ struct DbfHeader {
     n_bytes_per_record: usize,
 }
 
-#[derive(Debug)]
 pub struct DbfMeta {
     n_records: usize,
     n_bytes_per_record: usize,
     fields: Box<[DbfField]>,
+    encoding: encoding::EncodingRef,
+}
+
+// encoding::EncodingRef does not implement std::fmt::Debug
+impl fmt::Debug for DbfMeta {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("DbfMeta")
+            .field("n_records", &self.n_records)
+            .field("n_bytes_per_record", &self.n_bytes_per_record)
+            .field("fields", &self.fields)
+            .field("encoding", &self.encoding.name())
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -139,13 +151,14 @@ fn read_dbf_fields(file: &mut io::Read, dbf_header: &DbfHeader) -> Result<Box<[D
 /// Assumes the cursor is at the start of the file.
 ///
 /// Side-effect: advances the file cursor to the first data record.
-fn read_dbf_meta(file: &mut io::Read) -> Result<DbfMeta, DbfError> {
+fn read_dbf_meta(file: &mut io::Read, encoding: encoding::EncodingRef) -> Result<DbfMeta, DbfError> {
     read_dbf_header(file).and_then(|dbf_header| {
         read_dbf_fields(file, &dbf_header).map(|dbf_fields| {
             DbfMeta {
                 n_records: dbf_header.n_records,
                 n_bytes_per_record: dbf_header.n_bytes_per_record,
                 fields: dbf_fields,
+                encoding: encoding
             }
         })
     })
@@ -214,10 +227,10 @@ pub struct DbfReader<R: io::Read> {
 /// }
 /// # }
 /// ```
-pub fn open(path: &Path, encoding: &encoding::Encoding) -> Result<DbfReader<io::BufReader<fs::File>>, DbfError> {
+pub fn open(path: &Path, encoding: encoding::EncodingRef) -> Result<DbfReader<io::BufReader<fs::File>>, DbfError> {
     match fs::File::open(path) {
         Err(err) => { Err(DbfError::IOError(err)) },
-        Ok(mut f) => {
+        Ok(f) => {
             let r = io::BufReader::new(f);
             DbfReader::new(r, encoding)
         }
@@ -240,12 +253,13 @@ pub fn open(path: &Path, encoding: &encoding::Encoding) -> Result<DbfReader<io::
 /// }
 /// ```
 pub fn open_ascii(path: &Path) -> Result<DbfReader<io::BufReader<fs::File>>, DbfError> {
-    open(path, encoding::all::ASCII)
+    let ascii = encoding::label::encoding_from_whatwg_label(&"ascii").unwrap();
+    open(path, ascii)
 }
 
 impl<R: io::Read> DbfReader<R> {
-    pub fn new(mut file: R, encoding: &encoding::Encoding) -> Result<DbfReader<R>, DbfError> {
-        read_dbf_meta(&mut file).map(move |dbf_meta| {
+    pub fn new(mut file: R, encoding: encoding::EncodingRef) -> Result<DbfReader<R>, DbfError> {
+        read_dbf_meta(&mut file, encoding).map(move |dbf_meta| {
             DbfReader::<R> {
                 file: file,
                 n_records_already_iterated: 0,

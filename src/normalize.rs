@@ -2,9 +2,8 @@ use std::cmp::Ordering;
 use std::collections::btree_map::{BTreeMap,Entry};
 use itertools::Itertools;
 
-use topogeo::Point;
-use topogeo::geo::{ Edge, Ring, Region, WindingOrder };
-use topogeo::topology::{DirectedEdge, Direction, TopoEdge, TopoRegion, TopoRing, Topology, TopologyBuilder};
+use geo::{ Edge, Point, Ring, Region, WindingOrder };
+use topology::{DirectedEdge, Direction, TopoEdge, TopoRegion, TopoRing, Topology, TopologyBuilder};
 
 /// Ring data structure used when normalizing.
 #[derive(Debug)]
@@ -419,10 +418,9 @@ pub fn normalize<Data: Copy>(topo: &Topology<Data>) -> Topology<Data> {
 
 #[cfg(test)]
 mod test {
-    use topogeo::Point;
-    use topogeo::geo::{Region, Ring};
-    use topogeo::topology::{Direction, TopoEdge, TopoRing, TopologyBuilder};
-    use topogeo::normalize::normalize;
+    use geo::{Point, Region, Ring};
+    use topology::{Direction, TopoEdge, TopoRing, TopologyBuilder};
+    use normalize::normalize;
 
     fn edge_to_points<T>(edge: &TopoEdge<T>) -> Vec<Point> {
         edge.points.clone()

@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
 
-use topogeo::Point;
-use topogeo::geo::{WindingOrder, Edge, Ring, Region};
+use geo::{WindingOrder, Edge, Point, Ring, Region};
 
 /// A graph of non-overlapping polygons.
 ///

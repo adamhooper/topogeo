@@ -3,11 +3,7 @@ extern crate encoding;
 //#[macro_use]
 extern crate itertools;
 
-pub mod topogeo;
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-    }
-}
+pub mod geo;
+pub mod topology;
+pub mod normalize;
+pub mod read;

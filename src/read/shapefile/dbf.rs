@@ -178,7 +178,7 @@ fn read_dbf_record(file: &mut io::Read, dbf_meta: Arc<DbfMeta>) -> Result<DbfRec
 /// # Example
 ///
 /// ```TODO
-/// use topogeo::topogeo::read::shapefile::dbf::DbfReader;
+/// use topogeo::read::shapefile::dbf::DbfReader;
 ///
 /// # let mut path = std::env::current_dir().unwrap();
 /// # path.push("test/read/shapefile/dbf/string-test.dbf");
@@ -203,7 +203,7 @@ pub struct DbfReader<R: io::Read> {
 /// # extern crate topogeo;
 ///
 /// # fn main() {
-/// use topogeo::topogeo::read::shapefile::dbf;
+/// use topogeo::read::shapefile::dbf;
 /// use encoding;
 ///
 /// # let mut path = std::env::current_dir().unwrap();
@@ -230,7 +230,7 @@ pub fn open(path: &Path, encoding: &encoding::Encoding) -> Result<DbfReader<io::
 /// # Example
 ///
 /// ```
-/// use topogeo::topogeo::read::shapefile::dbf;
+/// use topogeo::read::shapefile::dbf;
 ///
 /// # let mut path = std::env::current_dir().unwrap();
 /// # path.push("test/read/shapefile/dbf/string-test.dbf");

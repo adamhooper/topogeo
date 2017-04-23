@@ -1,5 +1,10 @@
-use super::Point;
 use itertools::Itertools;
+
+/// Point is comparable so TopoEdge can have a canonical direction (top-left to
+/// bottom-right, conceptually). That helps us build EdgeSet without checking
+/// two directions.
+#[derive(Clone, Copy, Debug, Hash, Ord, Eq, PartialEq, PartialOrd)]
+pub struct Point(pub u32, pub u32);
 
 /// A path joining two Points, via any number of intermediate Points.
 #[derive(Clone,Debug)]

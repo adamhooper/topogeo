@@ -10,64 +10,99 @@ use std::sync::Arc;
 use byteorder::{ByteOrder, LittleEndian};
 use encoding;
 
-#[derive(Debug)]
+#[derive(Copy,Clone)]
 pub enum DbfType {
-    Unsupported,
-    Char,
+    Character(encoding::EncodingRef),
     Numeric,
-    Float,
-    Long,
+    Logical,
+    Date,
+    FloatingPoint,
+    Timestamp,
     Double,
+    Long,
+    Unsupported,
 }
 
-#[derive(Debug)]
+// encoding::EncodingRef does not implement std::fmt::Debug
+impl fmt::Debug for DbfType {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &DbfType::Character(encoding) => {
+                fmt.debug_struct("DbfType::Character")
+                    .field("encoding", &encoding.name())
+                    .finish()
+            }
+            &DbfType::Numeric => { write!(fmt, "DbfType::Numeric") }
+            &DbfType::Logical => { write!(fmt, "DbfType::Logical") }
+            &DbfType::Date => { write!(fmt, "DbfType::Date") }
+            &DbfType::FloatingPoint => { write!(fmt, "DbfType::FloatingPoint") }
+            &DbfType::Timestamp => { write!(fmt, "DbfType::Timestamp") }
+            &DbfType::Double => { write!(fmt, "DbfType::Double") }
+            &DbfType::Long => { write!(fmt, "DbfType::Long") }
+            &DbfType::Unsupported => { write!(fmt, "DbfType::Unsupported") }
+        }
+    }
+}
+
+impl DbfType {
+    fn with_code(u: u8, encoding: encoding::EncodingRef) -> DbfType {
+        match u as char {
+            'C' => { DbfType::Character(encoding) },
+            'N' => { DbfType::Numeric },
+            'L' => { DbfType::Logical },
+            'D' => { DbfType::Date },
+            'F' => { DbfType::FloatingPoint },
+            '@' => { DbfType::Timestamp },
+            'O' => { DbfType::Double },
+            '+' | '|' => { DbfType::Long },
+            _ => { DbfType::Unsupported }
+        }
+    }
+}
+
+#[derive(Debug,Clone)]
 pub struct DbfField {
-    name: String,
+    pub name: String,
     data_type: DbfType,
-    offset: u16,
-    len: u8,
-    decimal_count: u8,
+    offset: usize,
+    len: usize,
+}
+
+impl DbfField {
+    pub fn read_string(&self, record: DbfRecord) -> Result<String, DbfError> {
+        match &self.data_type {
+            &DbfType::Character(encoding) => {
+                let bytes = &record.bytes[self.offset .. self.offset + self.len];
+                let n_ending_spaces = bytes.iter().rev().position(|&b| b != 0x20u8).unwrap_or(bytes.len());
+                encoding.decode(&bytes[0 .. self.len - n_ending_spaces], encoding::DecoderTrap::Strict)
+                    .map_err(|s| DbfError::ParseError(s.to_string()))
+            }
+            _ => { unimplemented!() }
+        }
+    }
 }
 
 const DBF_HEADER_LENGTH: usize = 32;
 const DBF_FIELD_DESCRIPTOR_LENGTH: usize = 32;
 
-#[derive(Debug)]
+#[derive(Debug,Copy,Clone)]
 struct DbfHeader {
-    n_records: usize,
-    n_header_bytes: usize,
-    n_bytes_per_record: usize,
+    pub n_records: usize,
+    pub n_header_bytes: usize,
+    pub n_bytes_per_record: usize,
 }
 
+#[derive(Debug)]
 pub struct DbfMeta {
-    n_records: usize,
-    n_bytes_per_record: usize,
-    fields: Box<[DbfField]>,
-    encoding: encoding::EncodingRef,
-}
-
-// encoding::EncodingRef does not implement std::fmt::Debug
-impl fmt::Debug for DbfMeta {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.debug_struct("DbfMeta")
-            .field("n_records", &self.n_records)
-            .field("n_bytes_per_record", &self.n_bytes_per_record)
-            .field("fields", &self.fields)
-            .field("encoding", &self.encoding.name())
-            .finish()
-    }
+    pub n_records: usize,
+    pub n_bytes_per_record: usize,
+    pub fields: Box<[DbfField]>,
 }
 
 #[derive(Debug)]
 pub struct DbfRecord {
     meta: Arc<DbfMeta>,
-    bytes: Box<[u8]>,
-}
-
-impl DbfRecord {
-    pub fn field_to_string(&self, field: &DbfField) -> String {
-        unreachable!()
-    }
+    pub bytes: Box<[u8]>,
 }
 
 #[derive(Debug)]
@@ -129,19 +164,51 @@ fn read_dbf_header(file: &mut io::Read) -> Result<DbfHeader, DbfError> {
     }
 }
 
+fn parse_dbf_field(bytes: &[u8], encoding: encoding::EncodingRef, offset: usize) -> Result<DbfField, DbfError> {
+    let last_index = bytes[0 .. 11].iter().position(|&x| x == 0u8).unwrap_or(11);
+    match encoding.decode(&bytes[0 .. last_index], encoding::DecoderTrap::Strict) {
+        Err(_) => { Err(DbfError::ParseError(String::from("Field name is not valid ") + encoding.name())) },
+        Ok(name) => {
+            Ok(DbfField {
+                name: name,
+                data_type: DbfType::with_code(bytes[11], encoding),
+                offset: offset,
+                len: bytes[16] as usize
+            })
+        }
+    }
+}
+
 /// Reads all field definitions from the file.
 ///
 /// Assumes exactly DBF_HEADER_LENGTH bytes of the file have been read already.
 /// In other words, call this after read_dbf_header().
 ///
 /// Side-effect: advances the file cursor to the first data record.
-fn read_dbf_fields(file: &mut io::Read, dbf_header: &DbfHeader) -> Result<Box<[DbfField]>, DbfError> {
+fn read_dbf_fields(file: &mut io::Read, encoding: encoding::EncodingRef, dbf_header: &DbfHeader) -> Result<Box<[DbfField]>, DbfError> {
     let mut buf = vec![ 0u8; dbf_header.n_header_bytes - DBF_HEADER_LENGTH ];
 
     match file.read_exact(&mut buf) {
         Err(err) => { Err(DbfError::IOError(err)) },
         Ok(_) => {
-            Ok(vec![].into_boxed_slice())
+            let mut v = Vec::<DbfField>::with_capacity(buf.len() / DBF_FIELD_DESCRIPTOR_LENGTH);
+            let mut offset = 1; // 0 is "deleted" flag
+
+            for chunk in buf.chunks(DBF_FIELD_DESCRIPTOR_LENGTH) {
+                if chunk.len() != DBF_FIELD_DESCRIPTOR_LENGTH {
+                    break;
+                }
+
+                match parse_dbf_field(&chunk, encoding, offset) {
+                    Err(err) => { return Err(err) },
+                    Ok(next) => {
+                        offset += next.len;
+                        v.push(next);
+                    }
+                }
+            }
+
+            Ok(v.into_boxed_slice())
         }
     }
 }
@@ -153,12 +220,11 @@ fn read_dbf_fields(file: &mut io::Read, dbf_header: &DbfHeader) -> Result<Box<[D
 /// Side-effect: advances the file cursor to the first data record.
 fn read_dbf_meta(file: &mut io::Read, encoding: encoding::EncodingRef) -> Result<DbfMeta, DbfError> {
     read_dbf_header(file).and_then(|dbf_header| {
-        read_dbf_fields(file, &dbf_header).map(|dbf_fields| {
+        read_dbf_fields(file, encoding, &dbf_header).map(|dbf_fields| {
             DbfMeta {
                 n_records: dbf_header.n_records,
                 n_bytes_per_record: dbf_header.n_bytes_per_record,
                 fields: dbf_fields,
-                encoding: encoding
             }
         })
     })
@@ -190,20 +256,47 @@ fn read_dbf_record(file: &mut io::Read, dbf_meta: Arc<DbfMeta>) -> Result<DbfRec
 ///
 /// # Example
 ///
-/// ```TODO
-/// use topogeo::read::shapefile::dbf::DbfReader;
+/// ```
+/// # extern crate encoding;
+/// # extern crate topogeo;
+///
+/// # fn main() {
+///   use std::fs;
+///   use std::io;
+///   use encoding;
+///   use topogeo::read::shapefile::dbf::DbfReader;
 ///
 /// # let mut path = std::env::current_dir().unwrap();
 /// # path.push("test/read/shapefile/dbf/string-test.dbf");
-/// let dbf_reader = DbfReader::with_path_ascii(&path).unwrap();
-/// for record in dbf_reader {
-///     println!("{:?}", record);
-/// }
+///
+///   let f = fs::File::open(&path).unwrap();
+///   let r = io::BufReader::new(f);
+///
+///   let enc = encoding::label::encoding_from_whatwg_label("ascii").unwrap();
+///
+///   // builder returns Result<DbfReader, DbfError>
+///   let mut dbf_reader = DbfReader::new(r, enc).unwrap();
+///
+///   println!("{:?}", dbf_reader.meta);
+///
+///   // get_field() method returns Option<DbfField>
+///   let foo = dbf_reader.get_field("foo").unwrap();
+///
+///   // dbf_reader.next(), an Iterator method, returns
+///   // Option<Result<DbfRecord, DbfError>>
+///   dbf_reader.next();
+///   let record = dbf_reader.next().unwrap().unwrap();
+///
+///   // DbfField::read_string() returns Result<String, DbfError::ParseError>
+///   assert_eq!(String::from("bar"), foo.read_string(record).unwrap());
+/// # let record = dbf_reader.next().unwrap().unwrap();
+/// # assert_eq!(String::from("baz"), foo.read_string(record).unwrap());
+/// # }
 /// ```
 pub struct DbfReader<R: io::Read> {
     file: R,
-    n_records_already_iterated: usize,
-    meta: Arc<DbfMeta>,
+    pub n_records_already_iterated: usize,
+    pub meta: Arc<DbfMeta>,
 }
 
 /// Opens an xBase ".dbf" file from the filesystem, following instructions at
@@ -266,6 +359,16 @@ impl<R: io::Read> DbfReader<R> {
                 meta: Arc::new(dbf_meta),
             }
         })
+    }
+
+    pub fn get_field(&self, name: &str) -> Option<DbfField> {
+        for field in &*self.meta.fields {
+            if field.name == name {
+                return Some(field.clone())
+            }
+        }
+
+        return None
     }
 }
 

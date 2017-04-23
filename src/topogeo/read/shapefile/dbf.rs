@@ -3,10 +3,12 @@
 
 use std::error;
 use std::fmt;
+use std::fs;
 use std::io;
+use std::path::Path;
 use std::sync::Arc;
 use byteorder::{ByteOrder, LittleEndian};
-use encoding::{CodecError, Encoding};
+use encoding;
 
 #[derive(Debug)]
 pub enum DbfType {
@@ -54,12 +56,6 @@ impl DbfRecord {
     pub fn field_to_string(&self, field: &DbfField) -> String {
         unreachable!()
     }
-}
-
-pub struct DbfReader<'a, F: 'a+io::Read> {
-    file: &'a mut F,
-    n_records_already_iterated: usize,
-    meta: Arc<DbfMeta>,
 }
 
 #[derive(Debug)]
@@ -155,13 +151,6 @@ fn read_dbf_meta(file: &mut io::Read) -> Result<DbfMeta, DbfError> {
     })
 }
 
-#[derive(Debug)]
-pub enum DbfReadResult {
-    Record(DbfRecord),
-    Err(DbfError),
-    Eof,
-}
-
 /// Reads a single record from a .dbf file.
 ///
 /// Assumes the cursor is at the start of the record and that the record
@@ -169,13 +158,13 @@ pub enum DbfReadResult {
 /// here).
 ///
 /// Side-effect: advances the file cursor to the next record.
-fn read_dbf_record(file: &mut io::Read, dbf_meta: Arc<DbfMeta>) -> DbfReadResult {
+fn read_dbf_record(file: &mut io::Read, dbf_meta: Arc<DbfMeta>) -> Result<DbfRecord, DbfError> {
     let mut buf = vec![ 0u8; dbf_meta.n_bytes_per_record ];
 
     match file.read_exact(&mut buf) {
-        Err(err) => { DbfReadResult::Err(DbfError::IOError(err)) },
+        Err(err) => { Err(DbfError::IOError(err)) },
         Ok(_) => {
-            DbfReadResult::Record(DbfRecord {
+            Ok(DbfRecord {
                 meta: dbf_meta,
                 bytes: buf.into_boxed_slice(),
             })
@@ -183,24 +172,99 @@ fn read_dbf_record(file: &mut io::Read, dbf_meta: Arc<DbfMeta>) -> DbfReadResult
     }
 }
 
-impl<'a, F: io::Read> DbfReader<'a, F> {
-    pub fn new(file: &'a mut F, encoding: &Encoding) -> Result<DbfReader<'a, F>, DbfError> {
-        read_dbf_meta(file).map(move |dbf_meta| {
-            DbfReader::<'a, F> {
+/// Reads an xBase ".dbf" file, following instructions at
+/// https://www.clicketyclick.dk/databases/xbase/format/dbf.html
+///
+/// # Example
+///
+/// ```TODO
+/// use topogeo::topogeo::read::shapefile::dbf::DbfReader;
+///
+/// # let mut path = std::env::current_dir().unwrap();
+/// # path.push("test/read/shapefile/dbf/string-test.dbf");
+/// let dbf_reader = DbfReader::with_path_ascii(&path).unwrap();
+/// for record in dbf_reader {
+///     println!("{:?}", record);
+/// }
+/// ```
+pub struct DbfReader<R: io::Read> {
+    file: R,
+    n_records_already_iterated: usize,
+    meta: Arc<DbfMeta>,
+}
+
+/// Opens an xBase ".dbf" file from the filesystem, following instructions at
+/// https://www.clicketyclick.dk/databases/xbase/format/dbf.html
+///
+/// # Example
+///
+/// ```
+/// # extern crate encoding;
+/// # extern crate topogeo;
+///
+/// # fn main() {
+/// use topogeo::topogeo::read::shapefile::dbf;
+/// use encoding;
+///
+/// # let mut path = std::env::current_dir().unwrap();
+/// # path.push("test/read/shapefile/dbf/string-test.dbf");
+/// let dbf_reader = dbf::open(&path, encoding::all::UTF_8).unwrap();
+/// for record in dbf_reader {
+///     println!("{:?}", record);
+/// }
+/// # }
+/// ```
+pub fn open(path: &Path, encoding: &encoding::Encoding) -> Result<DbfReader<io::BufReader<fs::File>>, DbfError> {
+    match fs::File::open(path) {
+        Err(err) => { Err(DbfError::IOError(err)) },
+        Ok(mut f) => {
+            let r = io::BufReader::new(f);
+            DbfReader::new(r, encoding)
+        }
+    }
+}
+
+/// Opens an xBase ".dbf" file from the filesystem, following instructions at
+/// https://www.clicketyclick.dk/databases/xbase/format/dbf.html
+///
+/// # Example
+///
+/// ```
+/// use topogeo::topogeo::read::shapefile::dbf;
+///
+/// # let mut path = std::env::current_dir().unwrap();
+/// # path.push("test/read/shapefile/dbf/string-test.dbf");
+/// let dbf_reader = dbf::open_ascii(&path).unwrap();
+/// for record in dbf_reader {
+///     println!("{:?}", record);
+/// }
+/// ```
+pub fn open_ascii(path: &Path) -> Result<DbfReader<io::BufReader<fs::File>>, DbfError> {
+    open(path, encoding::all::ASCII)
+}
+
+impl<R: io::Read> DbfReader<R> {
+    pub fn new(mut file: R, encoding: &encoding::Encoding) -> Result<DbfReader<R>, DbfError> {
+        read_dbf_meta(&mut file).map(move |dbf_meta| {
+            DbfReader::<R> {
                 file: file,
                 n_records_already_iterated: 0,
                 meta: Arc::new(dbf_meta),
             }
         })
     }
+}
 
-    pub fn next(&mut self) -> DbfReadResult {
+impl<R: io::Read> Iterator for DbfReader<R> {
+    type Item = Result<DbfRecord, DbfError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
         if self.n_records_already_iterated == self.meta.n_records {
-            DbfReadResult::Eof
+            None
         } else {
-            let ret = read_dbf_record(self.file, self.meta.clone());
+            let ret = read_dbf_record(&mut self.file, self.meta.clone());
             self.n_records_already_iterated += 1;
-            ret
+            Some(ret)
         }
     }
 }

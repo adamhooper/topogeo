@@ -4,6 +4,7 @@ use std::error;
 use std::fmt;
 use std::fs;
 use std::io;
+use std::path::Path;
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
 use itertools::Itertools;
 
@@ -302,6 +303,40 @@ impl<R: io::Read> Iterator for ShpReader<R> {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Reads an ESRI ".shp" Shapefile, following instructions at
+/// https://www.esri.com/library/whitepapers/pdfs/shapefile.pdf
+///
+/// # Example
+///
+/// ```
+/// use topogeo::read::shapefile::shp;
+///
+/// # let mut path = std::env::current_dir().unwrap();
+/// # path.push("test/read/shapefile/shp/simple.shp");
+///
+/// // builder returns Result<shp::ShpReader, shp::ShpError>
+/// let mut shp_reader = shp::open(&path).unwrap();
+///
+/// assert_eq!(220, shp_reader.header.file_n_bytes);
+///
+/// // shp_reader.next(), an Iterator method, returns
+/// // Option<Result<shp::ShpPolygonRecord, shp::ShpError>>
+/// let polygon = shp_reader.next().unwrap().unwrap();
+///
+/// assert_eq!(1, polygon.rings.len());
+/// assert_eq!(4, polygon.rings[0].0.len());
+/// assert_eq!(shp::ShpPoint(7631181.2140951585, 1241556.341007172), polygon.rings[0].0[0]);
+/// ```
+pub fn open(path: &Path) -> Result<ShpReader<io::BufReader<fs::File>>, ShpError> {
+    match fs::File::open(path) {
+        Err(err) => Err(ShpError::IOError(err)),
+        Ok(f) => {
+            let r = io::BufReader::new(f);
+            ShpReader::new(r)
         }
     }
 }

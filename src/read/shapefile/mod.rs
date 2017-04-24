@@ -1,5 +1,5 @@
 pub mod dbf;
-//pub mod shp;
+pub mod shp;
 //
 //use std::io::{Error, Read};
 //use dbf::DbfReader;

@@ -1,4 +1,4 @@
-/// Reads xbase ".dbf" file, as per
+/// Reads xBase ".dbf" file, as per
 /// https://www.clicketyclick.dk/databases/xbase/format/dbf.html
 
 use std::error;

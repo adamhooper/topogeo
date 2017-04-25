@@ -68,14 +68,41 @@ pub struct DbfField {
     len: usize,
 }
 
+fn trim_end_spaces(bytes: &[u8]) -> &[u8] {
+    let n_ending_spaces = bytes.iter().rev().position(|&b| b != 0x20u8).unwrap_or(bytes.len());
+    &bytes[.. bytes.len() - n_ending_spaces]
+}
+
+fn trim_start_spaces(bytes: &[u8]) -> &[u8] {
+    let n_start_spaces = bytes.iter().position(|&b| b != 0x20u8).unwrap_or(0);
+    &bytes[n_start_spaces ..]
+}
+
 impl DbfField {
-    pub fn read_string(&self, record: DbfRecord) -> Result<String, DbfError> {
+    pub fn read_string(&self, record: &DbfRecord) -> Result<String, DbfError> {
+        let bytes = &record.bytes[self.offset .. self.offset + self.len];
+
         match &self.data_type {
             &DbfType::Character(encoding) => {
-                let bytes = &record.bytes[self.offset .. self.offset + self.len];
-                let n_ending_spaces = bytes.iter().rev().position(|&b| b != 0x20u8).unwrap_or(bytes.len());
-                encoding.decode(&bytes[0 .. self.len - n_ending_spaces], encoding::DecoderTrap::Strict)
+                encoding.decode(trim_end_spaces(bytes), encoding::DecoderTrap::Strict)
                     .map_err(|s| DbfError::ParseError(s.to_string()))
+            }
+            &DbfType::Long => Ok(LittleEndian::read_u32(bytes).to_string()),
+            &DbfType::Numeric => {
+                let trimmed_bytes = trim_start_spaces(bytes);
+                for (i, &u) in trimmed_bytes.iter().enumerate() {
+                    if i == 0 && u == '-' as u8 {
+                        continue;
+                    }
+                    if u >= '0' as u8 && u <= '9' as u8 {
+                        continue;
+                    }
+                    return Err(DbfError::ParseError(format!("Numeric field contained byte {}, which is invalid", u)));
+                }
+                if trimmed_bytes == [ '-' as u8 ] {
+                    return Err(DbfError::ParseError("Numeric field was '-', which is not a number".to_string()));
+                }
+                Ok(String::from_utf8(trimmed_bytes.to_vec()).unwrap())
             }
             _ => { unimplemented!() }
         }
@@ -288,11 +315,12 @@ fn read_dbf_record(file: &mut io::Read, dbf_meta: Arc<DbfMeta>) -> Result<DbfRec
 ///   let record = dbf_reader.next().unwrap().unwrap();
 ///
 ///   // DbfField::read_string() returns Result<String, DbfError::ParseError>
-///   assert_eq!(String::from("bar"), foo.read_string(record).unwrap());
+///   assert_eq!(String::from("bar"), foo.read_string(&record).unwrap());
 /// # let record = dbf_reader.next().unwrap().unwrap();
-/// # assert_eq!(String::from("baz"), foo.read_string(record).unwrap());
+/// # assert_eq!(String::from("baz"), foo.read_string(&record).unwrap());
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct DbfReader<R: io::Read> {
     file: R,
     pub n_records_already_iterated: usize,

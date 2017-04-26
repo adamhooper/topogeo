@@ -113,6 +113,22 @@ pub struct ShapefileRecord {
     pub data: dbf::DbfRecord,
 }
 
+impl fmt::Display for ShapefileRecord {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut r = write!(f, "ShapefileRecord({}; rings: ", self.data);
+
+        for (i, ref ring) in self.rings.iter().enumerate() {
+            if i > 0 {
+                r = r.and_then(|_| write!(f, "; "));
+            }
+
+            r = r.and_then(|_| write!(f, "{}", ring));
+        }
+
+        r.and_then(|_| write!(f, ")"))
+    }
+}
+
 impl<R: io::Read, S: io::Read> ShapefileReader<R, S> {
     pub fn new(r: R, s: S, encoding: encoding::EncodingRef) -> Result<ShapefileReader<R, S>, ShapefileError> {
         match (shp::ShpReader::new(r), dbf::DbfReader::new(s, encoding)) {

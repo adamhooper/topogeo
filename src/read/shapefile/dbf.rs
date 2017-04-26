@@ -9,6 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 use byteorder::{ByteOrder, LittleEndian};
 use encoding;
+use regex;
 
 #[derive(Copy,Clone)]
 pub enum DbfType {
@@ -73,9 +74,17 @@ fn trim_end_spaces(bytes: &[u8]) -> &[u8] {
     &bytes[.. bytes.len() - n_ending_spaces]
 }
 
-fn trim_start_spaces(bytes: &[u8]) -> &[u8] {
-    let n_start_spaces = bytes.iter().position(|&b| b != 0x20u8).unwrap_or(0);
-    &bytes[n_start_spaces ..]
+fn dbf_numeric_to_valid_string(bytes: &[u8]) -> Result<String, DbfError> {
+    lazy_static! {
+        static ref RE: regex::bytes::Regex = regex::bytes::Regex::new("^ *(-?[0-9]+(?:\\.[0-9]+)?)$").unwrap();
+    }
+    match RE.captures(bytes) {
+        None => Err(DbfError::ParseError(String::from("Bytes in numeric record do not represent a number"))),
+        Some(c) => {
+            let byte_slice = c.get(1).unwrap().as_bytes();
+            Ok(String::from_utf8(byte_slice.to_vec()).unwrap())
+        }
+    }
 }
 
 impl DbfField {
@@ -89,20 +98,7 @@ impl DbfField {
             }
             &DbfType::Long => Ok(LittleEndian::read_u32(bytes).to_string()),
             &DbfType::Numeric => {
-                let trimmed_bytes = trim_start_spaces(bytes);
-                for (i, &u) in trimmed_bytes.iter().enumerate() {
-                    if i == 0 && u == '-' as u8 {
-                        continue;
-                    }
-                    if u >= '0' as u8 && u <= '9' as u8 {
-                        continue;
-                    }
-                    return Err(DbfError::ParseError(format!("Numeric field contained byte {}, which is invalid", u)));
-                }
-                if trimmed_bytes == [ '-' as u8 ] {
-                    return Err(DbfError::ParseError("Numeric field was '-', which is not a number".to_string()));
-                }
-                Ok(String::from_utf8(trimmed_bytes.to_vec()).unwrap())
+                dbf_numeric_to_valid_string(bytes)
             }
             _ => { unimplemented!() }
         }
@@ -130,6 +126,31 @@ pub struct DbfMeta {
 pub struct DbfRecord {
     meta: Arc<DbfMeta>,
     pub bytes: Box<[u8]>,
+}
+
+impl fmt::Display for DbfRecord {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut s = String::new();
+
+        for (i, ref field) in self.meta.fields.iter().enumerate() {
+            if i != 0 {
+                s.push_str("; ");
+            }
+
+            match field.read_string(self) {
+                Err(err) => {
+                    return write!(f, "{{Invalid DBF record: {:?}}}", err);
+                },
+                Ok(value) => {
+                    s.push_str(field.name.as_str());
+                    s.push(':');
+                    s.push_str(value.as_str());
+                }
+            }
+        }
+
+        write!(f, "{{{}}}", s)
+    }
 }
 
 #[derive(Debug)]

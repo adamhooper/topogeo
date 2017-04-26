@@ -4,6 +4,8 @@ version = "0.1.0"
 authors = ["Adam Hooper <adam@adamhooper.com>"]
 
 [dependencies]
+byteorder = "1.0.0"
 encoding = "0.2.33"
 itertools = "0.6.0"
-byteorder = "1.0.0"
+lazy_static = "0.2.8"
+regex = "0.2.1"

@@ -100,8 +100,27 @@ pub struct ShpPolygonRecord {
 #[derive(Debug,Clone)]
 pub struct ShpPolygonRing(pub Box<[ShpPoint]>);
 
+impl fmt::Display for ShpPolygonRing {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut r = write!(f, "[");
+        for (i, &point) in self.0.iter().enumerate() {
+            if i > 0 {
+                r = r.and_then(|_| write!(f, ","));
+            }
+            r = r.and_then(|_| write!(f, "{}", point));
+        }
+        r.and_then(|_| write!(f, "]"))
+    }
+}
+
 #[derive(Debug,Clone,Copy,PartialEq,PartialOrd)]
 pub struct ShpPoint(pub f64, pub f64);
+
+impl fmt::Display for ShpPoint {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "({},{})", self.0, self.1)
+    }
+}
 
 /// Reads the first 100 bytes of the file.
 ///
@@ -203,8 +222,6 @@ fn parse_polygon_record(buf: &[u8], record_number: u32) -> Result<ShpPolygonReco
     if last_part + 3 >= points.len() {
         return Err(ShpError::ParseError(format!("Record number {} has a ring starting at point {}, but there are only {} points in the record", record_number, parts.last().unwrap(), num_points)));
     }
-    println!("last part: {}", last_part);
-    println!("num_points: {}", num_points);
     let mut last_ring_copies = vec![ ShpPoint(0., 0.); num_points - last_part ].into_boxed_slice();
     last_ring_copies.copy_from_slice(&points[last_part .. num_points]);
     rings.push(ShpPolygonRing(last_ring_copies));

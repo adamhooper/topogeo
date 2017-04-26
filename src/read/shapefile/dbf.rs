@@ -82,7 +82,7 @@ fn dbf_numeric_to_valid_string(bytes: &[u8]) -> Result<String, DbfError> {
         None => Err(DbfError::ParseError(String::from("Bytes in numeric record do not represent a number"))),
         Some(c) => {
             let byte_slice = c.get(1).unwrap().as_bytes();
-            Ok(String::from_utf8(byte_slice.to_vec()).unwrap())
+            Ok(unsafe { String::from_utf8_unchecked(byte_slice.to_vec()) })
         }
     }
 }

@@ -86,9 +86,13 @@ impl ShpShapeType {
 }
 
 #[derive(Debug,Copy,Clone)]
+pub struct ShpBoundingBox(pub f64, pub f64, pub f64, pub f64);
+
+#[derive(Debug,Copy,Clone)]
 pub struct ShpHeader {
     pub file_n_bytes: usize,
     pub shape_type: ShpShapeType,
+    pub bounding_box: ShpBoundingBox,
 }
 
 #[derive(Debug,Clone)]
@@ -139,6 +143,12 @@ fn read_shp_header(file: &mut io::Read) -> Result<ShpHeader, ShpError> {
             let file_len = BigEndian::read_u32(&buf[24..28]);
             let version = LittleEndian::read_u32(&buf[28..32]);
             let shape_type_u32 = LittleEndian::read_u32(&buf[32..36]);
+            let bounding_box = ShpBoundingBox(
+                LittleEndian::read_f64(&buf[36..44]),
+                LittleEndian::read_f64(&buf[44..52]),
+                LittleEndian::read_f64(&buf[52..60]),
+                LittleEndian::read_f64(&buf[60..68]),
+            );
 
             if magic_number != SHP_MAGIC_NUMBER {
                 return Err(ShpError::ParseError(format!("File has wrong magic number: found {}, expected {}", magic_number, SHP_MAGIC_NUMBER)));
@@ -153,6 +163,7 @@ fn read_shp_header(file: &mut io::Read) -> Result<ShpHeader, ShpError> {
                     Ok(ShpHeader {
                         file_n_bytes: (file_len * 2) as usize,
                         shape_type: ShpShapeType::Polygon,
+                        bounding_box: bounding_box,
                     })
                 }
                 Some(unsupported) => {

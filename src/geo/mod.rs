@@ -1,3 +1,4 @@
+use std::fmt;
 use itertools::Itertools;
 
 /// Point is comparable so TopoEdge can have a canonical direction (top-left to
@@ -6,9 +7,28 @@ use itertools::Itertools;
 #[derive(Clone, Copy, Debug, Hash, Ord, Eq, PartialEq, PartialOrd)]
 pub struct Point(pub u32, pub u32);
 
+impl fmt::Display for Point {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "({},{})", self.0, self.1)
+    }
+}
+
 /// A path joining two Points, via any number of intermediate Points.
 #[derive(Clone,Debug)]
-pub struct Edge(pub Vec<Point>);
+pub struct Edge(pub Box<[Point]>);
+
+impl fmt::Display for Edge {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut ret = write!(f, "Edge(");
+        for (i, point) in self.0.iter().enumerate() {
+            if i > 0 {
+                ret = ret.and_then(|_| write!(f, ","));
+            }
+            ret = ret.and_then(|_| write!(f, "{}", point));
+        }
+        ret.and_then(|_| write!(f, ")"))
+    }
+}
 
 /// A path joining a Point to itself, totalling three or more Points.
 ///
@@ -21,10 +41,35 @@ pub struct Edge(pub Vec<Point>);
 #[derive(Clone,Debug)]
 pub enum Ring {
     /// Efficient for geometry-related algorithms.
-    Points(Vec<Point>),
+    Points(Box<[Point]>),
 
     /// Efficient for topology-related algorithms.
-    Edges(Vec<Edge>),
+    Edges(Box<[Edge]>),
+}
+
+impl fmt::Display for Ring {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut ret = write!(f, "[");
+        match self {
+            &Ring::Points(ref points) => {
+                for (i, point) in points.iter().enumerate() {
+                    if i > 0 {
+                        ret = ret.and_then(|_| write!(f, ","));
+                    }
+                    ret = ret.and_then(|_| write!(f, "{}", point));
+                }
+            },
+            &Ring::Edges(ref edges) => {
+                for (i, edge) in edges.iter().enumerate() {
+                    if i > 0 {
+                        ret = ret.and_then(|_| write!(f, ","));
+                    }
+                    ret = ret.and_then(|_| write!(f, "{}", edge));
+                }
+            }
+        }
+        ret.and_then(|_| write!(f, "]"))
+    }
 }
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
@@ -34,36 +79,41 @@ pub enum WindingOrder {
 }
 
 impl Ring {
-    /// Returns all Points in the Ring, in order.
-    pub fn points(&self) -> Vec<Point> {
+    /// Returns all Points in the Ring, in order, copied.
+    pub fn points(&self) -> Box<[Point]> {
         match self {
             &Ring::Points(ref points) => points.clone(),
             &Ring::Edges(ref edges) => {
-                let len = edges.iter().fold(0, |sum, e| sum + e.0.len());
+                let len = edges.iter().map(|e| e.0.len()).sum();
                 let mut ret = Vec::<Point>::with_capacity(len);
-                for edge in edges {
-                    ret.extend_from_slice(&edge.0[.. edge.0.len() - 1]);
+                for ref edge in edges.iter() {
+                    ret.extend_from_slice(&*edge.0);
                 }
-                ret
+                ret.into_boxed_slice()
             }
         }
     }
 
     /// Returns all Edges in the Ring, in order.
-    pub fn edges(&self) -> Vec<Edge> {
+    pub fn edges(&self) -> Box<[Edge]> {
         match self {
             &Ring::Edges(ref edges) => edges.clone(),
             &Ring::Points(ref points) => {
-                points.windows(2).map(|e| Edge(e.to_vec())).collect()
+                let ret: Vec<Edge> = points.iter().tuple_windows()
+                    .map(|(&p1, &p2)| Edge(vec![ p1, p2 ].into_boxed_slice()))
+                    .collect();
+                ret.into_boxed_slice()
             }
         }
     }
 
     /// Returns winding order.
+    ///
+    /// Assumes (0,0) is the **top left** coordinate. In other words, this isn't
+    /// WGS84 (in which north is positive): it's like SVG or HTML5 <canvas>
+    /// coordinates.
     pub fn winding_order(&self) -> WindingOrder {
         let points = self.points();
-
-        println!("{:?}", points);
 
         assert!(points.len() > 2);
         assert!(points.first() == points.last());
@@ -87,8 +137,30 @@ impl Ring {
 #[derive(Debug)]
 pub struct Region<Data> {
     pub data: Data,
-    pub outer_rings: Vec<Ring>,
-    pub inner_rings: Vec<Ring>,
+    pub outer_rings: Box<[Ring]>,
+    pub inner_rings: Box<[Ring]>,
+}
+
+struct DisplayRings<'a>(&'a [Ring]);
+impl<'a> fmt::Display for DisplayRings<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut ret = write!(f, "[");
+        for (i, ref ring) in self.0.iter().enumerate() {
+            if i > 0 {
+                ret = ret.and_then(|_| write!(f, ", "));
+            }
+            ret = ret.and_then(|_| write!(f, "{}", ring));
+        }
+        ret.and_then(|_| write!(f, "]"))
+    }
+}
+
+impl<Data> fmt::Display for Region<Data> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let outer = DisplayRings(&*self.outer_rings);
+        let inner = DisplayRings(&*self.inner_rings);
+        write!(f, "Region([data], outer:{}, inner:{})", outer, inner)
+    }
 }
 
 #[cfg(Test)]
@@ -96,9 +168,9 @@ mod test {
     #[test]
     fn test_edge_ring_edges() {
         let edges = vec![
-            Edge(vec![ Point(1, 1), Point(1, 2), Point(2, 1) ]),
-            Edge(vec![ Point(2, 1), Point(1, 1) ]),
-        ];
+            Edge(vec![ Point(1, 1), Point(1, 2), Point(2, 1) ].into_boxed_slice()),
+            Edge(vec![ Point(2, 1), Point(1, 1) ].into_boxed_slice()),
+        ].into_boxed_slice();
         let ring: Ring = Ring::Edges(edges);
         assert_eq!(edges, ring.edges());
     }
@@ -106,25 +178,25 @@ mod test {
     #[test]
     fn test_edge_ring_points() {
         let ring: Ring = Ring::Edges(vec![
-            Edge(vec![ Point(1, 1), Point(1, 2), Point(2, 1) ]),
-            Edge(vec![ Point(2, 1), Point(1, 1) ]),
-        ]);
-        assert_eq!(vec![ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ], ring.points());
+            Edge(vec![ Point(1, 1), Point(1, 2), Point(2, 1) ].into_boxed_slice()),
+            Edge(vec![ Point(2, 1), Point(1, 1) ].into_boxed_slice()),
+        ].into_boxed_slice());
+        assert_eq!(vec![ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ].into_boxed_slice(), ring.points());
     }
 
     #[test]
     fn test_point_ring_edges() {
-        let ring = Ring::Points(vec![ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ]);
+        let ring = Ring::Points(vec![ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ].into_boxed_slice());
         assert_eq!(vec![
-            Edge(vec! [ Point(1, 1), Point(1, 2) ]),
-            Edge(vec! [ Point(1, 2), Point(2, 1) ]),
-            Edge(vec! [ Point(2, 1), Point(1, 1) ]),
-        ], ring.edges());
+            Edge(vec! [ Point(1, 1), Point(1, 2) ].into_boxed_slice()),
+            Edge(vec! [ Point(1, 2), Point(2, 1) ].into_boxed_slice()),
+            Edge(vec! [ Point(2, 1), Point(1, 1) ].into_boxed_slice()),
+        ].into_boxed_slice(), ring.edges());
     }
 
     #[test]
     fn test_point_ring_points() {
-        let points = vec![ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ];
+        let points = vec![ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ].into_boxed_slice();
         let ring = Ring::Points(points);
         assert_eq!(points, ring.points());
     }

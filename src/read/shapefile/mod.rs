@@ -82,11 +82,13 @@ use encoding;
 pub mod dbf;
 pub mod shp;
 pub mod shapefile;
+pub mod geo;
 
 pub use self::dbf::{DbfField, DbfRecord};
-pub use self::shp::{ShpPoint, ShpPolygonRecord, ShpPolygonRing};
+pub use self::shp::{ShpBoundingBox, ShpPoint, ShpPolygonRecord, ShpPolygonRing};
 pub use self::shapefile::{ShapefileError, ShapefileReader};
 pub use self::shapefile::open;
+pub use self::geo::ShapefileGeoIterator;
 
 pub fn open_ascii(shp_path: &Path) -> Result<ShapefileReader<io::BufReader<fs::File>, io::BufReader<fs::File>>, ShapefileError> {
     open(shp_path, encoding::all::ASCII)

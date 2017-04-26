@@ -103,12 +103,12 @@ impl<Data> TopologyBuilder<Data>
             inner_rings: Vec::with_capacity(region.inner_rings.len()),
         });
 
-        for ref input_ring in &region.outer_rings {
+        for ref input_ring in region.outer_rings.iter() {
             let ring = self.build_ring(&input_ring, &topo_region);
             topo_region.outer_rings.push(ring);
         }
 
-        for ref input_ring in &region.inner_rings {
+        for ref input_ring in region.inner_rings.iter() {
             let ring = self.build_ring(&input_ring, &topo_region);
             topo_region.inner_rings.push(ring);
         }
@@ -125,7 +125,7 @@ impl<Data> TopologyBuilder<Data>
             directed_edges: Vec::with_capacity(edges.len()),
         });
 
-        for ref edge in edges {
+        for ref edge in edges.iter() {
             let directed_edge = self.build_directed_edge(edge, &*ret);
             ret.directed_edges.push(directed_edge);
         }
@@ -148,7 +148,9 @@ impl<Data> TopologyBuilder<Data>
             Direction::Backward
         };
 
-        let mut maybe_new_edge = Box::new(TopoEdge { points: points, rings: vec![] });
+        println!("Points: {:?}", points.to_vec());
+
+        let mut maybe_new_edge = Box::new(TopoEdge { points: points.into_vec(), rings: vec![] });
         let maybe_new_edge_p: *mut TopoEdge<Data> = &mut *maybe_new_edge;
 
         let edge_p: *mut TopoEdge<Data> = match self.topology.edges.entry(maybe_new_edge) {
@@ -184,10 +186,10 @@ mod tests {
         builder.add_region(&Region::<u32> {
             data: 42,
             outer_rings: vec![
-                Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ]),
-                Ring::Points(vec![ Point(10, 10), Point(20, 10), Point(10, 20), Point(10, 10) ]),
-            ],
-            inner_rings: vec![],
+                Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ].into_boxed_slice()),
+                Ring::Points(vec![ Point(10, 10), Point(20, 10), Point(10, 20), Point(10, 10) ].into_boxed_slice()),
+            ].into_boxed_slice(),
+            inner_rings: vec![].into_boxed_slice(),
         });
 
         let topology = builder.into_topology();
@@ -207,10 +209,10 @@ mod tests {
         builder.add_region(&Region::<()> {
             data: (),
             outer_rings: vec![
-                Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ]),
-                Ring::Points(vec![ Point(2, 1), Point(3, 1), Point(3, 2), Point(2, 1) ]),
-            ],
-            inner_rings: vec![]
+                Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ].into_boxed_slice()),
+                Ring::Points(vec![ Point(2, 1), Point(3, 1), Point(3, 2), Point(2, 1) ].into_boxed_slice()),
+            ].into_boxed_slice(),
+            inner_rings: vec![].into_boxed_slice()
         });
 
         let topology = builder.into_topology();
@@ -230,11 +232,10 @@ mod tests {
         builder.add_region(&Region::<()> {
             data: (),
             outer_rings: vec![
-                Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ]),
-                Ring::Points(vec![ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ]),
-            ],
-            inner_rings: vec![
-            ]
+                Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ].into_boxed_slice()),
+                Ring::Points(vec![ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ].into_boxed_slice()),
+            ].into_boxed_slice(),
+            inner_rings: vec![].into_boxed_slice()
         });
 
         let topology = builder.into_topology();
@@ -256,14 +257,14 @@ mod tests {
 
         builder.add_region(&Region::<()> {
             data: (),
-            outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ]) ],
-            inner_rings: vec![],
+            outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ].into_boxed_slice()) ].into_boxed_slice(),
+            inner_rings: vec![].into_boxed_slice(),
         });
 
         builder.add_region(&Region::<()> {
             data: (),
-            outer_rings: vec![ Ring::Points(vec![ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ]) ],
-            inner_rings: vec![],
+            outer_rings: vec![ Ring::Points(vec![ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ].into_boxed_slice()) ].into_boxed_slice(),
+            inner_rings: vec![].into_boxed_slice(),
         });
 
         let topology = builder.into_topology();
@@ -281,8 +282,8 @@ mod tests {
 
         builder.add_region(&Region::<()> {
             data: (),
-            outer_rings: vec![ Ring::Points(vec![ Point(0, 0), Point(3, 0), Point(0, 3), Point(0, 0) ]) ],
-            inner_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ]) ],
+            outer_rings: vec![ Ring::Points(vec![ Point(0, 0), Point(3, 0), Point(0, 3), Point(0, 0) ].into_boxed_slice()) ].into_boxed_slice(),
+            inner_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ].into_boxed_slice()) ].into_boxed_slice(),
         });
 
         let topology = builder.into_topology();

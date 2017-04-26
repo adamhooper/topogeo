@@ -149,6 +149,10 @@ impl<R: io::Read, S: io::Read> ShapefileReader<R, S> {
         self.dbf_reader.meta.fields.clone()
     }
 
+    pub fn bounding_box(&self) -> &shp::ShpBoundingBox {
+        &self.shp_reader.header.bounding_box
+    }
+
     pub fn get_field(&self, name: &str) -> Option<dbf::DbfField> {
         self.dbf_reader.get_field(name)
     }

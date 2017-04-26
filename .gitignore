@@ -1,2 +1,4 @@
 target
 Cargo.lock
+cat-shp
+shp-to-geo-data

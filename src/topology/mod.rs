@@ -1,3 +1,4 @@
+use std::cmp;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::hash::{Hash, Hasher};
@@ -15,9 +16,8 @@ use geo::{WindingOrder, Edge, Point, Ring, Region};
 /// the vertex of three or more TopoRings -- that is, they're contained in three
 /// or more Edges. We won't move them when we simplify().
 pub struct Topology<Data> {
-    pub regions: Vec<Box<TopoRegion<Data>>>,
-    // HashMap's Entry API lets us insert-or-get the key
-    pub edges: HashMap<Box<TopoEdge<Data>>,()>,
+    pub regions: Box<[Box<TopoRegion<Data>>]>,
+    pub edges: Box<[Box<TopoEdge<Data>>]>,
 }
 
 /// A group of TopoRings that _means_ something.
@@ -58,10 +58,24 @@ pub enum Direction {
 /// The path has no direction: there is only the canonical TopoEdge, which goes
 /// from top-left Node to bottom-right Node. If you want a directed path, use
 /// DirectedEdge.
+///
+/// A Topology can only contain a single TopoEdge with the given points.
 #[derive(Clone, Debug)]
 pub struct TopoEdge<Data> {
     pub points: Vec<Point>,
     pub rings: Vec<*const TopoRing<Data>>,
+}
+
+impl<Data> PartialOrd for TopoEdge<Data> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        self.points.partial_cmp(&other.points)
+    }
+}
+
+impl<Data> Ord for TopoEdge<Data> {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.points.cmp(&other.points)
+    }
 }
 
 impl<Data> PartialEq for TopoEdge<Data> {
@@ -79,7 +93,9 @@ impl<Data> Hash for TopoEdge<Data> {
 }
 
 pub struct TopologyBuilder<Data> {
-    topology: Topology<Data>,
+    regions: Vec<Box<TopoRegion<Data>>>,
+    // HashMap's Entry API lets us insert-or-get the key
+    edges: HashMap<Box<TopoEdge<Data>>,()>,
 }
 
 impl<Data> TopologyBuilder<Data>
@@ -87,10 +103,8 @@ impl<Data> TopologyBuilder<Data>
 {
     pub fn new() -> TopologyBuilder<Data> {
         TopologyBuilder::<Data> {
-            topology: Topology {
-                regions: vec!(),
-                edges: HashMap::new(),
-            }
+            regions: vec!(),
+            edges: HashMap::new(),
         }
     }
 
@@ -113,7 +127,7 @@ impl<Data> TopologyBuilder<Data>
             topo_region.inner_rings.push(ring);
         }
 
-        self.topology.regions.push(topo_region);
+        self.regions.push(topo_region);
     }
 
     /// Returns a Ring, building any Edges and Nodes that are missing.
@@ -153,7 +167,7 @@ impl<Data> TopologyBuilder<Data>
         let mut maybe_new_edge = Box::new(TopoEdge { points: points.into_vec(), rings: vec![] });
         let maybe_new_edge_p: *mut TopoEdge<Data> = &mut *maybe_new_edge;
 
-        let edge_p: *mut TopoEdge<Data> = match self.topology.edges.entry(maybe_new_edge) {
+        let edge_p: *mut TopoEdge<Data> = match self.edges.entry(maybe_new_edge) {
             Entry::Occupied(entry) => {
                 &**entry.key() as *const TopoEdge<Data> as *mut TopoEdge<Data>
             },
@@ -171,7 +185,16 @@ impl<Data> TopologyBuilder<Data>
     }
 
     pub fn into_topology(self) -> Topology<Data> {
-        self.topology
+        // We'll sort() the edges, so that normalize() can _really_ normalize.
+        let mut edges = Vec::<Box<TopoEdge<Data>>>::with_capacity(self.edges.len());
+        for (edge, _) in self.edges {
+            edges.push(edge);
+        }
+        edges.sort();
+        Topology {
+            regions: self.regions.into_boxed_slice(),
+            edges: edges.into_boxed_slice(),
+        }
     }
 }
 

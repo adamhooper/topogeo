@@ -406,7 +406,7 @@ fn normalize_region_rings<T>(in_rings: &[Box<TopoRing<T>>], winding_order: Windi
 pub fn normalize<Data: Copy>(topo: &Topology<Data>) -> Topology<Data> {
     let mut builder = TopologyBuilder::<Data>::new();
 
-    for ref region in &topo.regions {
+    for ref region in topo.regions.iter() {
         let outer_rings = normalize_region_rings(&region.outer_rings, WindingOrder::Clockwise);
         let inner_rings = normalize_region_rings(&region.inner_rings, WindingOrder::CounterClockwise);
         builder.add_region(&Region {
@@ -447,7 +447,7 @@ mod test {
         let normal = normalize(&topology);
 
         assert_eq!(1, normal.edges.len());
-        let edge: &TopoEdge<_> = normal.edges.keys().next().unwrap();
+        let edge: &TopoEdge<_> = &*normal.edges[0];
         assert_eq!(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ], edge_to_points(&edge));
     }
 
@@ -474,7 +474,7 @@ mod test {
         let normal = normalize(&topology);
 
         assert_eq!(3, normal.edges.len());
-        let edges: Vec<&TopoEdge<_>> = normal.edges.keys().map(|e| &**e).collect();
+        let edges: Vec<&TopoEdge<_>> = normal.edges.iter().map(|e| &**e).collect();
         let edge1 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[0].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
         let edge2 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[1].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
         assert_eq!(vec![ Point(1, 2), Point(1, 1), Point(2, 1) ], edge_to_points(&edge1));
@@ -508,7 +508,7 @@ mod test {
         let normal = normalize(&topology);
 
         assert_eq!(3, normal.edges.len());
-        let edges: Vec<&TopoEdge<_>> = normal.edges.keys().map(|e| &**e).collect();
+        let edges: Vec<&TopoEdge<_>> = normal.edges.iter().map(|e| &**e).collect();
         let edge1 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[0].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
         let edge2 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[1].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
         let edge12 = edges.iter().find(|e| e.rings.len() == 2).unwrap();
@@ -530,7 +530,7 @@ mod test {
         let normal = normalize(&topology);
 
         assert_eq!(1, normal.edges.len());
-        let edge: &TopoEdge<_> = normal.edges.keys().next().unwrap();
+        let edge: &TopoEdge<_> = &*normal.edges[0];
         assert_eq!(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ], edge_to_points(&edge));
     }
 

@@ -155,14 +155,12 @@ impl<Data> TopologyBuilder<Data>
         let p1 = points[0];
         let p2 = points[points.len() - 1];
 
-        let direction = if p1 < p2 || (p1 == p2 && Ring::Points(points.clone()).winding_order() == WindingOrder::Clockwise) {
+        let direction = if p1 < p2 || (p1 == p2 && (points.len() == 2 || Ring::Points(points.clone()).winding_order() == WindingOrder::Clockwise)) {
             Direction::Forward
         } else {
             points.reverse();
             Direction::Backward
         };
-
-        println!("Points: {:?}", points.to_vec());
 
         let mut maybe_new_edge = Box::new(TopoEdge { points: points.into_vec(), rings: vec![] });
         let maybe_new_edge_p: *mut TopoEdge<Data> = &mut *maybe_new_edge;

@@ -107,12 +107,19 @@ impl Ring {
         }
     }
 
-    /// Returns winding order.
+    /// Returns 2*area
+    pub fn area2(&self) -> u64 {
+        self.area2_and_winding_order().0
+    }
+
+    /// Returns 2*area and winding order.
     ///
     /// Assumes (0,0) is the **top left** coordinate. In other words, this isn't
     /// WGS84 (in which north is positive): it's like SVG or HTML5 <canvas>
     /// coordinates.
-    pub fn winding_order(&self) -> WindingOrder {
+    ///
+    /// A zero-area Ring is considered to be Clockwise.
+    pub fn area2_and_winding_order(&self) -> (u64, WindingOrder) {
         let points = self.points();
 
         assert!(points.len() > 2);
@@ -125,12 +132,22 @@ impl Ring {
             a += (p1.0 as i64) * (p2.1 as i64) - (p2.0 as i64) * (p1.1 as i64)
         }
 
-        assert!(a != 0);
-        if a > 0 {
-            WindingOrder::Clockwise
+        if a >= 0 {
+            (a as u64, WindingOrder::Clockwise)
         } else {
-            WindingOrder::CounterClockwise
+            (-a as u64, WindingOrder::CounterClockwise)
         }
+    }
+
+    /// Returns winding order.
+    ///
+    /// Assumes (0,0) is the **top left** coordinate. In other words, this isn't
+    /// WGS84 (in which north is positive): it's like SVG or HTML5 <canvas>
+    /// coordinates.
+    ///
+    /// A zero-area Ring is considered to be Clockwise.
+    pub fn winding_order(&self) -> WindingOrder {
+        self.area2_and_winding_order().1
     }
 }
 

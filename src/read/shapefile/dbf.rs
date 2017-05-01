@@ -122,7 +122,7 @@ pub struct DbfMeta {
     pub fields: Box<[DbfField]>,
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 pub struct DbfRecord {
     meta: Arc<DbfMeta>,
     pub bytes: Box<[u8]>,

@@ -6,5 +6,9 @@ extern crate regex;
 
 pub mod geo;
 pub mod topology;
-pub mod normalize;
+mod normalize;
+mod simplify;
 pub mod read;
+
+pub use normalize::normalize;
+pub use simplify::simplify;

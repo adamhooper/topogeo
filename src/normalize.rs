@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::btree_map::{BTreeMap,Entry};
+use std::ptr;
 use itertools::Itertools;
 
 use geo::{ Edge, Point, Ring, Region, WindingOrder };
@@ -42,7 +43,7 @@ impl<T> NormRing<T> {
 #[derive(Debug,Eq)]
 struct NormEdge<T> {
     points: Vec<Point>,
-    regions: Vec<*const TopoRegion<T>>,
+    regions: [ *const TopoRegion<T>; 2 ],
 }
 
 impl<T> PartialEq for NormEdge<T> {
@@ -55,20 +56,22 @@ impl<T> NormEdge<T> {
     fn with_directed_edge(directed_edge: &DirectedEdge<T>) -> NormEdge<T> {
         let ref edge: &TopoEdge<_> = unsafe { &(*directed_edge.edge) };
 
-        let mut points = edge.points.clone();
+        let mut points = edge.points.to_vec();
         if directed_edge.direction == Direction::Backward {
             points.reverse();
         }
 
-        let regions: Vec<*const TopoRegion<T>> = edge.rings.iter().map(|&r| unsafe { (*r).region }).collect();
-        assert!(regions.len() <= 2);
+        let regions = unsafe { [
+            (*edge.rings[0]).region,
+            if edge.rings[1].is_null() { ptr::null() } else { (*edge.rings[1]).region }
+        ] };
 
         NormEdge { points: points, regions: regions }
     }
 
     /// `true` iff this NormEdge is between two Rings in the same Region.
     fn is_redundant(&self) -> bool {
-        self.regions.len() == 2 && self.regions[0] == self.regions[1]
+        self.regions[0] == self.regions[1]
     }
 
     fn into_edge(self) -> Edge {
@@ -80,7 +83,7 @@ impl<T> Clone for NormEdge<T> {
     fn clone(&self) -> NormEdge<T> {
         NormEdge {
             points: self.points.clone(),
-            regions: self.regions.clone()
+            regions: self.regions
         }
     }
 }
@@ -173,13 +176,13 @@ fn join_related_edges<T>(edges: &Vec<NormEdge<T>>) -> Vec<NormEdge<T>> {
         }
     }
 
-    if ret.len() > 1 {
-        if ret[0].regions == ret.last().unwrap().regions {
-            let mut points = ret.last().unwrap().points.clone();
-            points.extend_from_slice(&ret[0].points[1..]);
-            ret[0].points = points;
-            ret.pop();
-        }
+    if ret.len() > 1 && ret[0].regions == ret.last().unwrap().regions {
+        // edges[0].points[0] isn't an important point. Join edges[0]
+        // and edges[last] into a single edge, edges[0].
+        let mut points = ret.last().unwrap().points.clone();
+        points.extend_from_slice(&ret[0].points[1..]);
+        ret[0].points = points;
+        ret.pop();
     }
 
     ret
@@ -361,7 +364,7 @@ fn join_adjacent_rings<T>(rings: &Vec<NormRing<T>>) -> Vec<NormRing<T>> {
 /// nix `EHGF` when called on outer rings, and it will nix `EFGH` when called
 /// on inner rings (since the edges have two rings and thus two Regions, and
 /// both Regions are identical). Ta-da! The donut is gone.
-fn normalize_region_rings<T>(in_rings: &[Box<TopoRing<T>>], winding_order: WindingOrder) -> Box<[Ring]> {
+fn normalize_region_rings<T>(in_rings: &[TopoRing<T>], winding_order: WindingOrder) -> Box<[Ring]> {
     let mut rings = Vec::<NormRing<T>>::with_capacity(in_rings.len());
 
     for ref boxed_ring in in_rings {
@@ -369,7 +372,7 @@ fn normalize_region_rings<T>(in_rings: &[Box<TopoRing<T>>], winding_order: Windi
 
         let mut edges = Vec::<NormEdge<T>>::with_capacity(in_ring.directed_edges.len());
 
-        for ref directed_edge in &in_ring.directed_edges {
+        for ref directed_edge in in_ring.directed_edges.iter() {
             edges.push(NormEdge::<T>::with_directed_edge(directed_edge));
         }
 
@@ -403,14 +406,14 @@ fn normalize_region_rings<T>(in_rings: &[Box<TopoRing<T>>], winding_order: Windi
 ///   the leftmost or topmost `Node`.
 /// * **Island Node**: An island (or lake) has one Node, and that's the leftmost (or
 ///   in case of a tie, topmost) `Point`.
-pub fn normalize<Data: Copy>(topo: &Topology<Data>) -> Topology<Data> {
+pub fn normalize<Data: Clone>(topo: &Topology<Data>) -> Topology<Data> {
     let mut builder = TopologyBuilder::<Data>::new();
 
     for ref region in topo.regions.iter() {
         let outer_rings = normalize_region_rings(&region.outer_rings, WindingOrder::Clockwise);
         let inner_rings = normalize_region_rings(&region.inner_rings, WindingOrder::CounterClockwise);
-        builder.add_region(&Region {
-            data: region.data,
+        builder.add_region(Region {
+            data: region.data.clone(),
             outer_rings: outer_rings,
             inner_rings: inner_rings,
         });
@@ -423,6 +426,7 @@ pub fn normalize<Data: Copy>(topo: &Topology<Data>) -> Topology<Data> {
 mod test {
     use geo::{Point, Region, Ring};
     use topology::{Direction, TopoEdge, TopoRing, TopologyBuilder};
+    use std::ptr;
     use normalize::normalize;
 
     fn edge_to_points<T>(edge: &TopoEdge<T>) -> Vec<Point> {
@@ -437,7 +441,7 @@ mod test {
         // | /
         // |/
         // C
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: (),
             outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ].into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![].into_boxed_slice(),
@@ -447,7 +451,7 @@ mod test {
         let normal = normalize(&topology);
 
         assert_eq!(1, normal.edges.len());
-        let edge: &TopoEdge<_> = &*normal.edges[0];
+        let ref edge = normal.edges[0];
         assert_eq!(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ], edge_to_points(&edge));
     }
 
@@ -459,12 +463,12 @@ mod test {
         // | /|
         // |/ |
         // *--*
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: 1,
             outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ].into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![].into_boxed_slice(),
         });
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: 2,
             outer_rings: vec![ Ring::Points(vec![ Point(2, 1), Point(2, 2), Point(1, 2), Point(2, 1) ].into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![].into_boxed_slice(),
@@ -474,13 +478,13 @@ mod test {
         let normal = normalize(&topology);
 
         assert_eq!(3, normal.edges.len());
-        let edges: Vec<&TopoEdge<_>> = normal.edges.iter().map(|e| &**e).collect();
-        let edge1 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[0].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
-        let edge2 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[1].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
+        let ref edges = normal.edges;
+        let edge1 = edges.iter().find(|e| e.rings == [ &normal.regions[0].outer_rings[0] as *const TopoRing<u32>, ptr::null() ]).unwrap();
+        let edge2 = edges.iter().find(|e| e.rings == [ &normal.regions[1].outer_rings[0] as *const TopoRing<u32>, ptr::null() ]).unwrap();
         assert_eq!(vec![ Point(1, 2), Point(1, 1), Point(2, 1) ], edge_to_points(&edge1));
         // edge2 is reversed in its ring.
         assert_eq!(vec![ Point(1, 2), Point(2, 2), Point(2, 1) ], edge_to_points(&edge2));
-        let edge12 = edges.iter().find(|e| e.rings.len() == 2).unwrap();
+        let edge12 = edges.iter().find(|e| !e.rings[1].is_null()).unwrap();
         assert_eq!(vec![ Point(1, 2), Point(2, 1) ], edge_to_points(&edge12));
     }
 
@@ -493,12 +497,12 @@ mod test {
         // | * |
         // | 2 |
         // *---*
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: 1,
             outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(3, 1), Point(2, 2), Point(1, 1) ].into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![].into_boxed_slice(),
         });
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: 2,
             outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(2, 2), Point(3, 1), Point(3, 3), Point(1, 3), Point(1, 1) ].into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![].into_boxed_slice(),
@@ -508,10 +512,10 @@ mod test {
         let normal = normalize(&topology);
 
         assert_eq!(3, normal.edges.len());
-        let edges: Vec<&TopoEdge<_>> = normal.edges.iter().map(|e| &**e).collect();
-        let edge1 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[0].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
-        let edge2 = edges.iter().find(|e| e.rings == vec![ &(*normal.regions[1].outer_rings[0]) as *const TopoRing<u32> ]).unwrap();
-        let edge12 = edges.iter().find(|e| e.rings.len() == 2).unwrap();
+        let ref edges = normal.edges;
+        let edge1 = edges.iter().find(|e| e.rings == [ &normal.regions[0].outer_rings[0] as *const TopoRing<u32>, ptr::null() ]).unwrap();
+        let edge2 = edges.iter().find(|e| e.rings == [ &normal.regions[1].outer_rings[0] as *const TopoRing<u32>, ptr::null() ]).unwrap();
+        let edge12 = edges.iter().find(|e| !e.rings[1].is_null()).unwrap();
         assert_eq!(vec![ Point(1, 1), Point(3, 1) ], edge_to_points(&edge1));
         assert_eq!(vec![ Point(1, 1), Point(1, 3), Point(3, 3), Point(3, 1) ], edge_to_points(&edge2));
         assert_eq!(vec![ Point(1, 1), Point(2, 2), Point(3, 1) ], edge_to_points(&edge12));
@@ -520,7 +524,7 @@ mod test {
     #[test]
     fn rotate_island() {
         let mut builder = TopologyBuilder::<()>::new();
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: (),
             outer_rings: vec![ Ring::Points(vec![ Point(2, 1), Point(1, 2), Point(1, 1), Point(2, 1) ].into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![].into_boxed_slice(),
@@ -530,7 +534,7 @@ mod test {
         let normal = normalize(&topology);
 
         assert_eq!(1, normal.edges.len());
-        let edge: &TopoEdge<_> = &*normal.edges[0];
+        let ref edge = normal.edges[0];
         assert_eq!(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ], edge_to_points(&edge));
     }
 
@@ -543,12 +547,12 @@ mod test {
         // /  * |
         // |  2 |
         // *----*
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: 1,
             outer_rings: vec![ Ring::Points(vec![ Point(3, 2), Point(2, 1), Point(4, 1), Point(3, 2) ].into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![].into_boxed_slice(),
         });
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: 2,
             outer_rings: vec![ Ring::Points(vec![ Point(3, 2), Point(4, 1), Point(4, 3), Point(1, 3), Point(2, 1), Point(3, 2) ].into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![].into_boxed_slice(),
@@ -577,7 +581,7 @@ mod test {
         // | /| | /
         // |/ | |/
         // *--* *
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: (),
             outer_rings: vec![
                 Ring::Points(vec![ Point(1, 1), Point(2, 1), Point(1, 2), Point(1, 1) ].into_boxed_slice()),
@@ -608,7 +612,7 @@ mod test {
         // | /  | /
         // |/   |/
         // *    *
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: (),
             outer_rings: vec![ Ring::Points(second.clone().into_boxed_slice()), Ring::Points(first.clone().into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![].into_boxed_slice(),
@@ -632,7 +636,7 @@ mod test {
         // | /
         // |/
         // B
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: (),
             outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(1, 2), Point(2, 1), Point(1, 1) ].into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![].into_boxed_slice(),
@@ -660,7 +664,7 @@ mod test {
         // |F/
         // |/
         // C
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: (),
             outer_rings: vec![ Ring::Points(vec![ Point(1, 1), Point(4, 1), Point(1, 4), Point(1, 1) ].into_boxed_slice()) ].into_boxed_slice(),
             inner_rings: vec![ Ring::Points(vec![ Point(2, 2), Point(3, 2), Point(2, 3), Point(2, 2) ].into_boxed_slice()) ].into_boxed_slice(),
@@ -692,7 +696,7 @@ mod test {
         // |F/
         // |/
         // C
-        builder.add_region(&Region {
+        builder.add_region(Region {
             data: (),
             outer_rings: vec![
                 Ring::Points(vec![ Point(1, 1), Point(4, 1), Point(1, 4), Point(1, 1) ].into_boxed_slice()),

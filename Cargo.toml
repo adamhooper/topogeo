@@ -9,3 +9,6 @@ encoding = "0.2.33"
 itertools = "0.6.0"
 lazy_static = "0.2.8"
 regex = "0.2.1"
+
+[profile.release]
+debug = true

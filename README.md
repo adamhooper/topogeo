@@ -18,6 +18,9 @@ blocks.
 * [ ] Clips a topology into slightly-overlapping tiles.
 * [ ] Reads and writes a simple binary format that encodes topology. (It's like topojson,
   but easier to parse and faster.)
+  
+With inconsequential exceptions, operations scale [O(n)](https://en.wikipedia.org/wiki/Time_complexity#Linear_time)
+with the input size.
 
 ## Installation
 

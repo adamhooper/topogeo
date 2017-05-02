@@ -78,6 +78,66 @@ pub enum WindingOrder {
     CounterClockwise,
 }
 
+/// Returns 2*area, positive iff the ring is clockwise.
+///
+/// Assumes (0,0) is the **top left** coordinate. In other words, this isn't
+/// WGS84 (in which north is positive): it's like SVG or HTML5 <canvas>
+/// coordinates.
+///
+/// Assumes the first and last Points are identical.
+///
+/// You can call this method on each edge in turn and sum the results to arrive
+/// at the total area (and implicit winding order).
+pub fn signed_area2<'a, T: IntoIterator<Item=&'a Point>>(points: T) -> i64 {
+    // https://en.wikipedia.org/wiki/Shoelace_formula
+    let mut a: i64 = 0;
+
+    for (p1, p2) in points.into_iter().tuple_windows() {
+        a += (p1.0 as i64) * (p2.1 as i64) - (p2.0 as i64) * (p1.1 as i64)
+    }
+
+    a
+}
+
+/// Returns 2*area and winding order.
+///
+/// Assumes (0,0) is the **top left** coordinate. In other words, this isn't
+/// WGS84 (in which north is positive): it's like SVG or HTML5 <canvas>
+/// coordinates.
+///
+/// A zero-area Ring is considered to be Clockwise.
+///
+/// Assumes the first and last Points are identical.
+pub fn area2_and_winding_order<'a, T: IntoIterator<Item=&'a Point>>(points: T) -> (u64, WindingOrder) {
+    let a = signed_area2(points);
+
+    if a >= 0 {
+        (a as u64, WindingOrder::Clockwise)
+    } else {
+        (-a as u64, WindingOrder::CounterClockwise)
+    }
+}
+
+/// Returns 2*area
+///
+/// Assumes the first and last Points are identical.
+pub fn area2<'a, T: IntoIterator<Item=&'a Point>>(points: T) -> u64 {
+    area2_and_winding_order(points).0
+}
+
+/// Returns winding order.
+///
+/// Assumes (0,0) is the **top left** coordinate. In other words, this isn't
+/// WGS84 (in which north is positive): it's like SVG or HTML5 <canvas>
+/// coordinates.
+///
+/// A zero-area Ring is considered to be Clockwise.
+///
+/// Assumes the first and last Points are identical.
+pub fn winding_order<'a, T: IntoIterator<Item=&'a Point>>(points: T) -> WindingOrder {
+    area2_and_winding_order(points).1
+}
+
 impl Ring {
     /// Returns all Points in the Ring, in order, copied.
     pub fn points(&self) -> Box<[Point]> {
@@ -120,22 +180,20 @@ impl Ring {
     ///
     /// A zero-area Ring is considered to be Clockwise.
     pub fn area2_and_winding_order(&self) -> (u64, WindingOrder) {
-        let points = self.points();
+        match self {
+            &Ring::Edges(ref edges) => {
+                let mut a: i64 = 0;
+                for edge in edges.iter() {
+                    a += signed_area2(edge.0.iter());
+                }
 
-        assert!(points.len() > 2);
-        assert!(points.first() == points.last());
-
-        // https://en.wikipedia.org/wiki/Shoelace_formula
-        let mut a: i64 = 0;
-
-        for (p1, p2) in points.iter().tuple_windows() {
-            a += (p1.0 as i64) * (p2.1 as i64) - (p2.0 as i64) * (p1.1 as i64)
-        }
-
-        if a >= 0 {
-            (a as u64, WindingOrder::Clockwise)
-        } else {
-            (-a as u64, WindingOrder::CounterClockwise)
+                if a >= 0 {
+                    (a as u64, WindingOrder::Clockwise)
+                } else {
+                    (-a as u64, WindingOrder::CounterClockwise)
+                }
+            }
+            &Ring::Points(ref points) => area2_and_winding_order(points.iter()),
         }
     }
 

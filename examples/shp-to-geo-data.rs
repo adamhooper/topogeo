@@ -5,6 +5,7 @@ use std::io;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process;
+use topogeo::clip;
 use topogeo::read::shapefile;
 use topogeo::topology;
 
@@ -87,7 +88,7 @@ fn main() {
     println!("Normalized topology:");
     print_topology_description(&normalized);
 
-    let simplified = topogeo::simplify(normalized, 1000000000000000000u64);
-    println!("Simplified topology:");
-    print_topology_description(&simplified);
+    let clipped = clip::clip_topology(&normalized, &clip::ClipMask::MinX(1u32 << 31));
+    println!("Clipped topology:");
+    print_topology_description(&clipped);
 }

@@ -5,8 +5,7 @@ use std::ptr;
 use geo::{WindingOrder, Edge, Point, Ring, Region};
 use super::types::{Topology, TopoEdge, TopoRegion, TopoRing, DirectedEdge, Direction};
 
-// Our "Id" types are array indices.
-type EdgeId = usize;
+type EdgeId = usize; // array index
 
 #[derive(Debug)]
 struct BuildRegion<Data> {
@@ -27,7 +26,7 @@ struct BuildDirectedEdge {
 #[derive(Debug,Eq,PartialEq,Hash)]
 struct BuildEdge(Vec<Point>);
 
-fn build_ring_to_topo_ring_with_null_ptrs<Data>(edges: &Vec<TopoEdge<Data>>, build_ring: &BuildRing) -> TopoRing<Data> {
+fn build_ring_to_topo_ring_with_null_ptrs<Data>(edges: &[TopoEdge<Data>], build_ring: &BuildRing) -> TopoRing<Data> {
     let directed_edges: Vec<DirectedEdge<Data>> = build_ring.0.iter().map(|build_de| {
         DirectedEdge {
             edge: &edges[build_de.edge_id] as *const TopoEdge<Data>,
@@ -137,7 +136,7 @@ impl<Data> TopologyBuilder<Data>
 
         let mut edges_sort = Vec::<Option<TopoEdge<Data>>>::with_capacity(self.edges.len());
         for _ in 0 .. self.edges.len() {
-            edges_sort.push(None)
+            edges_sort.push(None);
         }
         for (build_edge, id) in self.edges {
             edges_sort[id] = Some(TopoEdge {

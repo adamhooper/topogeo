@@ -12,10 +12,10 @@ blocks.
   [rust-geo](https://github.com/georust/rust-geo).)
 * Converts to an internal topology format, using shared edges.
 * Simplifies topology, using Visvalingam simplification, without changing topology.
+* Clips a topology along a single axis (do this four times to clip by rectangle)
 * [ ] Filters out tiny areas.
 * [ ] Merges topological regions into parent ones, to support "zoom-out" coarser
   level of detail.
-* [ ] Clips a topology into slightly-overlapping tiles.
 * [ ] Reads and writes a simple binary format that encodes topology. (It's like topojson,
   but easier to parse and faster.)
   

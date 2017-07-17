@@ -1,6 +1,5 @@
 mod types;
-pub mod edge;
-pub mod topology;
+pub mod geo;
 
 pub use self::types::ClipMask;
-pub use self::topology::clip_topology;
+pub use self::geo::clip_region;

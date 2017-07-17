@@ -1,49 +1,16 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::ptr;
 
 use geo::{WindingOrder, Edge, Point, Ring, Region};
-use super::types::{Topology, TopoEdge, TopoRegion, TopoRing, DirectedEdge, Direction};
-
-type EdgeId = usize; // array index
-
-#[derive(Debug)]
-struct BuildRegion<Data> {
-    data: Data,
-    outer_rings: Vec<BuildRing>,
-    inner_rings: Vec<BuildRing>,
-}
-
-#[derive(Debug)]
-struct BuildRing(Vec<BuildDirectedEdge>);
-
-#[derive(Debug)]
-struct BuildDirectedEdge {
-    edge_id: EdgeId,
-    direction: Direction,
-}
-
-#[derive(Debug,Eq,PartialEq,Hash)]
-struct BuildEdge(Vec<Point>);
-
-fn build_ring_to_topo_ring_with_null_ptrs<Data>(edges: &[TopoEdge<Data>], build_ring: &BuildRing) -> TopoRing<Data> {
-    let directed_edges: Vec<DirectedEdge<Data>> = build_ring.0.iter().map(|build_de| {
-        DirectedEdge {
-            edge: &edges[build_de.edge_id] as *const TopoEdge<Data>,
-            direction: build_de.direction,
-        }
-    }).collect();
-
-    TopoRing {
-        directed_edges: directed_edges.into_boxed_slice(),
-        region: ptr::null(),
-    }
-}
+use super::types::{Topology, TopoEdge, TopoRegion, TopoRing, TopoEdgeId, TopoRingId, TopoRegionId, NULL_ID, DirectedEdge, Direction};
 
 pub struct TopologyBuilder<Data> {
-    regions: Vec<BuildRegion<Data>>,
+    regions: Vec<TopoRegion<Data>>,
+    rings: Vec<TopoRing>,
+    edges: Vec<TopoEdge>,
+
     // HashMap's Entry API lets us insert-or-get the key
-    edges: HashMap<BuildEdge, EdgeId>,
+    edge_ids: HashMap<Vec<Point>, TopoEdgeId>,
 }
 
 impl<Data> TopologyBuilder<Data>
@@ -51,57 +18,68 @@ impl<Data> TopologyBuilder<Data>
     pub fn new() -> TopologyBuilder<Data> {
         TopologyBuilder::<Data> {
             regions: vec!(),
-            edges: HashMap::new(),
+            rings: vec!(),
+            edges: vec!(),
+            edge_ids: HashMap::new(),
         }
     }
 
     pub fn add_region(&mut self, region: Region<Data>) {
         let Region { data, outer_rings, inner_rings } = region;
+        let region_id = self.regions.len() as TopoRegionId;
 
-        let build_outer_rings = self.build_rings(outer_rings);
+        let outer_ring_ids = self.add_rings(region_id, &outer_rings[..]);
 
-        if build_outer_rings.len() > 0 {
-            let build_inner_rings = self.build_rings(inner_rings);
-            self.regions.push(BuildRegion {
+        if outer_ring_ids.len() > 0 {
+            let inner_ring_ids = self.add_rings(region_id, &inner_rings[..]);
+            self.regions.push(TopoRegion {
                 data: data,
-                outer_rings: build_outer_rings,
-                inner_rings: build_inner_rings,
+                outer_ring_ids: outer_ring_ids,
+                inner_ring_ids: inner_ring_ids,
             });
         }
     }
 
-    /// Converts the given Rings to BuildRings.
-    ///
-    /// Side-effects: may add to self.edges.
+    /// Adds to self.edges, self.edge_ids and self.rings; returns IDs.
     ///
     /// Eliminates any Rings that have zero area. Beware: this may return an
     /// empty Vec.
-    fn build_rings(&mut self, rings: Box<[Ring]>) -> Vec<BuildRing> {
-        rings.into_iter().flat_map(|r| self.build_ring(r)).collect()
+    fn add_rings(&mut self, region_id: TopoRegionId, rings: &[Ring]) -> Box<[TopoRingId]> {
+        rings.into_iter()
+            .map(|r| self.add_ring(region_id, r))
+            .filter(|&r| r != NULL_ID)
+            .collect::<Vec<TopoRingId>>()
+            .into_boxed_slice()
     }
 
-    /// Returns a Ring representing the input.
+    /// Adds to self.edges, self.edge_ids and self.rings; returns an ID.
     ///
-    /// Side-effect: may add to self.edges.
-    ///
-    /// Returns None if the given ring is invalid (area == 0).
-    fn build_ring(&mut self, ring: &Ring) -> Option<BuildRing> {
+    /// Returns NULL_ID if the given ring is invalid (area == 0).
+    fn add_ring(&mut self, region_id: TopoRegionId, ring: &Ring) -> TopoRingId {
         if ring.area2() == 0 {
-            return None
+            return NULL_ID;
         }
 
-        let directed_edges: Vec<BuildDirectedEdge> = ring.edges().iter()
-            .flat_map(|e| self.build_directed_edge(e))
+        let ring_id: TopoRingId = self.rings.len() as TopoRingId;
+
+        let directed_edges: Vec<DirectedEdge> = ring.edges().iter()
+            .flat_map(|e| self.add_directed_edge(ring_id, e))
             .collect();
 
-        Some(BuildRing(directed_edges))
+        self.rings.push(TopoRing {
+            directed_edges: directed_edges.into_boxed_slice(),
+            region_id: region_id,
+        });
+        ring_id
     }
 
-    /// Returns a BuildDirectedEdge, building a BuildEdge if it is missing.
-    fn build_directed_edge(&mut self, edge: &Edge) -> Option<BuildDirectedEdge> {
+    /// Returns a DirectedEdge, building an Edge if it is missing.
+    ///
+    /// Returns None when given an empty (zero-length) edge.
+    fn add_directed_edge(&mut self, ring_id: TopoRingId, edge: &Edge) -> Option<DirectedEdge> {
         let mut points = edge.0.to_vec();
 
-        if points.len() < 2 || (points.len() == 2 && points[0] == points[1]) {
+        if points.len() < 2 || points.iter().all(|&p| p == points[0]) {
             // zero-length edge
             return None
         }
@@ -116,78 +94,33 @@ impl<Data> TopologyBuilder<Data>
             Direction::Backward
         };
 
-        let next_id = self.edges.len();
+        let next_id = self.edges.len() as TopoEdgeId;
 
-        let maybe_new_edge = BuildEdge(points);
-        let edge_id: EdgeId = match self.edges.entry(maybe_new_edge) {
-            Entry::Occupied(entry) => *entry.get(),
+        let edge_id: TopoEdgeId = match self.edge_ids.entry(points) {
+            Entry::Occupied(entry) => {
+                let ret = *entry.get();
+                self.edges[ret as usize].ring2_id = ring_id;
+                ret
+            }
             Entry::Vacant(entry) => {
+                self.edges.push(TopoEdge {
+                    points: entry.key().clone().into_boxed_slice(),
+                    ring1_id: ring_id,
+                    ring2_id: NULL_ID,
+                });
                 entry.insert(next_id);
                 next_id
             }
         };
 
-        Some(BuildDirectedEdge { edge_id: edge_id, direction: direction })
+        Some(DirectedEdge { edge_id: edge_id, direction: direction })
     }
 
     pub fn into_topology(self) -> Topology<Data> {
-        // We can "sort" by id because we know the ids are <= self.edges.len():
-        // just put each edge in its place.
-
-        let mut edges_sort = Vec::<Option<TopoEdge<Data>>>::with_capacity(self.edges.len());
-        for _ in 0 .. self.edges.len() {
-            edges_sort.push(None);
-        }
-        for (build_edge, id) in self.edges {
-            edges_sort[id] = Some(TopoEdge {
-                points: build_edge.0.into_boxed_slice(),
-                rings: [ ptr::null(); 2 ], // we'll fill these in later
-            })
-        }
-
-        let edges: Vec<TopoEdge<Data>> = edges_sort.into_iter()
-            .map(|o| o.expect("programming error: an Edge is missing from self.edges"))
-            .collect();
-
-        let mut regions: Vec<TopoRegion<Data>> = self.regions.into_iter().map(|build_region| {
-            let BuildRegion { data, outer_rings, inner_rings } = build_region;
-
-            let topo_outer_rings: Vec<TopoRing<Data>> = outer_rings.into_iter()
-                .map(|r| build_ring_to_topo_ring_with_null_ptrs(&edges, &r)).collect();
-            let topo_inner_rings: Vec<TopoRing<Data>> = inner_rings.into_iter()
-                .map(|r| build_ring_to_topo_ring_with_null_ptrs(&edges, &r)).collect();
-
-            TopoRegion {
-                data: data,
-                outer_rings: topo_outer_rings.into_boxed_slice(),
-                inner_rings: topo_inner_rings.into_boxed_slice(),
-            }
-        }).collect();
-
-        for mut region in regions.iter_mut() {
-            let region_p = region as *const TopoRegion<Data>;
-
-            for mut ring in region.outer_rings.iter_mut().chain(region.inner_rings.iter_mut()) {
-                ring.region = region_p;
-
-                for directed_edge in ring.directed_edges.iter() {
-                    let mut edge = unsafe { &mut *(directed_edge.edge as *mut TopoEdge<Data>) };
-
-                    let i = if edge.rings[0].is_null() {
-                        0
-                    } else {
-                        assert!(edge.rings[1].is_null());
-                        1
-                    };
-
-                    edge.rings[i] = ring as *const TopoRing<Data>;
-                }
-            }
-        }
-
         Topology {
-            regions: regions.into_boxed_slice(),
-            edges: edges.into_boxed_slice(),
+            regions: self.regions.into_boxed_slice(),
+            rings: self.rings.into_boxed_slice(),
+            edges: self.edges.into_boxed_slice(),
         }
     }
 }
@@ -261,11 +194,11 @@ mod tests {
         assert_eq!(5, topology.edges.len());
 
         assert_eq!(
-            topology.regions[0].outer_rings[0].directed_edges[1].edge,
-            topology.regions[0].outer_rings[1].directed_edges[2].edge
+            topology.rings[0].directed_edges[1].edge_id,
+            topology.rings[1].directed_edges[2].edge_id
         );
-        assert_eq!(Direction::Backward, topology.regions[0].outer_rings[0].directed_edges[1].direction);
-        assert_eq!(Direction::Forward, topology.regions[0].outer_rings[1].directed_edges[2].direction);
+        assert_eq!(Direction::Backward, topology.rings[0].directed_edges[1].direction);
+        assert_eq!(Direction::Forward, topology.rings[1].directed_edges[2].direction);
     }
 
     #[test]
@@ -288,8 +221,8 @@ mod tests {
 
         assert_eq!(5, topology.edges.len());
         assert_eq!(
-            topology.regions[0].outer_rings[0].directed_edges[1].edge,
-            topology.regions[1].outer_rings[0].directed_edges[2].edge
+            topology.rings[0].directed_edges[1].edge_id,
+            topology.rings[1].directed_edges[2].edge_id
         );
     }
 
@@ -337,7 +270,7 @@ mod tests {
         });
 
         let topology = builder.into_topology();
-        assert_eq!(1, topology.regions[0].outer_rings.len());
+        assert_eq!(1, topology.regions[0].outer_ring_ids.len());
     }
 
     #[test]

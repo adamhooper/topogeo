@@ -4,6 +4,8 @@ use itertools::Itertools;
 /// Point is comparable so TopoEdge can have a canonical direction (top-left to
 /// bottom-right, conceptually). That helps us build EdgeSet without checking
 /// two directions.
+///
+/// (0,0) is the top-left of the conceptual space.
 #[derive(Clone, Copy, Debug, Hash, Ord, Eq, PartialEq, PartialOrd)]
 pub struct Point(pub u32, pub u32);
 
@@ -11,6 +13,14 @@ impl fmt::Display for Point {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "({},{})", self.0, self.1)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rectangle {
+    pub top: u32,
+    pub left: u32,
+    pub bottom: u32,
+    pub right: u32,
 }
 
 /// A path joining two Points, via any number of intermediate Points.
@@ -46,6 +56,14 @@ pub enum Ring {
     /// Efficient for topology-related algorithms.
     Edges(Box<[Edge]>),
 }
+
+impl PartialEq for Ring {
+    fn eq(&self, other: &Self) -> bool {
+        self.points().to_vec() == other.points().to_vec()
+    }
+}
+
+impl Eq for Ring {}
 
 impl fmt::Display for Ring {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -207,6 +225,11 @@ impl Ring {
     pub fn winding_order(&self) -> WindingOrder {
         self.area2_and_winding_order().1
     }
+}
+
+#[derive(Debug)]
+pub struct Geography<Data> {
+    regions: Box<[Region<Data>]>,
 }
 
 #[derive(Debug)]

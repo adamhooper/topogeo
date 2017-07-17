@@ -12,8 +12,24 @@ use geo::Point;
 /// or more Edges. We won't move them when we simplify().
 pub struct Topology<Data> {
     pub regions: Box<[TopoRegion<Data>]>,
-    pub edges: Box<[TopoEdge<Data>]>,
+    pub rings: Box<[TopoRing]>,
+    pub edges: Box<[TopoEdge]>,
 }
+
+// There are a few ways to represent a graph:
+//
+// * Arc references: easy to get wrong, leading to leaks.
+// * Pointers: needs unsafe{}; forces us to add Data type to Edges and Rings;
+//             tricky to rewrite when, say, filtering or normalizing.
+// * Array indexes: easier to understand than pointers, and take less space;
+//                  means we need to store Rings in Topology structure
+//                  directly (so we can point to it).
+//
+// After flirting with pointers, the final decision was array indexes.
+pub type TopoRegionId = u32;
+pub type TopoRingId = u32;
+pub type TopoEdgeId = u32;
+pub const NULL_ID: u32 = 0xffff as u32;
 
 /// A group of TopoRings that _means_ something.
 ///
@@ -21,8 +37,8 @@ pub struct Topology<Data> {
 #[derive(Debug)]
 pub struct TopoRegion<Data> {
     pub data: Data,
-    pub outer_rings: Box<[TopoRing<Data>]>,
-    pub inner_rings: Box<[TopoRing<Data>]>,
+    pub outer_ring_ids: Box<[TopoRingId]>,
+    pub inner_ring_ids: Box<[TopoRingId]>,
 }
 
 /// A polygon.
@@ -31,14 +47,14 @@ pub struct TopoRegion<Data> {
 /// If edges go counter-clockwise, the edges form the _inside_ boundary (i.e.,
 /// this is a "hole" in a polygon).
 #[derive(Debug)]
-pub struct TopoRing<Data> {
-    pub directed_edges: Box<[DirectedEdge<Data>]>,
-    pub region: *const TopoRegion<Data>,
+pub struct TopoRing {
+    pub directed_edges: Box<[DirectedEdge]>,
+    pub region_id: TopoRegionId,
 }
 
 #[derive(Debug)]
-pub struct DirectedEdge<Data> {
-    pub edge: *const TopoEdge<Data>,
+pub struct DirectedEdge {
+    pub edge_id: TopoEdgeId,
     pub direction: Direction,
 }
 
@@ -56,7 +72,8 @@ pub enum Direction {
 ///
 /// A Topology can only contain a single TopoEdge with the given points.
 #[derive(Debug)]
-pub struct TopoEdge<Data> {
+pub struct TopoEdge {
     pub points: Box<[Point]>,
-    pub rings: [ *const TopoRing<Data>; 2 ],
+    pub ring1_id: TopoRingId,
+    pub ring2_id: TopoRingId,
 }

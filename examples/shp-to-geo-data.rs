@@ -5,7 +5,6 @@ use std::io;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process;
-use topogeo::clip;
 use topogeo::read::shapefile;
 use topogeo::topology;
 
@@ -14,16 +13,16 @@ fn print_topology_description<Data>(topology: &topology::Topology<Data>) {
     let mut n_inner_rings = 0;
 
     for ref region in topology.regions.iter() {
-        n_outer_rings += region.outer_rings.len();
-        n_inner_rings += region.inner_rings.len();
+        n_outer_rings += region.outer_ring_ids.len();
+        n_inner_rings += region.inner_ring_ids.len();
     }
 
     let mut n_shared_edges = 0;
     let mut n_lone_edges = 0;
     let mut n_points = 0;
 
-    for ref edge in topology.edges.iter() {
-        if edge.rings[1].is_null() {
+    for edge in topology.edges.iter() {
+        if edge.ring2_id == topology::NULL_ID {
             n_lone_edges += 1;
         } else {
             n_shared_edges += 1;
@@ -88,7 +87,7 @@ fn main() {
     println!("Normalized topology:");
     print_topology_description(&normalized);
 
-    let clipped = clip::clip_topology(&normalized, &clip::ClipMask::MinX(1u32 << 31));
-    println!("Clipped topology:");
-    print_topology_description(&clipped);
+    //let clipped = clip::clip_topology(&normalized, &clip::ClipMask::MinX(1u32 << 31));
+    //println!("Clipped topology:");
+    //print_topology_description(&clipped);
 }

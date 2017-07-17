@@ -31,6 +31,18 @@ struct UnprocessedRings {
 
 /// Partitions rings into fully-inside and need-to-be-clipped collections;
 /// nixes fully-outside rings.
+///
+/// One big simplification may be confusing: at this point, outer rings and
+/// their holes aren't associated. So we may mark an outer ring as
+/// `partially_within_mask` while marking its holes as `fully_within_mask`: that
+/// would lead us to clip the outer ring but not its holes. That's actually a
+/// _good_ thing: we needn't associate that hole with its ring, ever, because
+/// the output Region won't need it. We'll just copy the holes into the final
+/// output.
+///
+/// We assume an outer ring surrounds its holes: if a hole is
+/// `partially_within_mask`, it follows that its outer ring is
+/// `partially_within_mask`.
 fn find_unprocessed_rings(rings: &[Ring], mask: &ClipMask) -> UnprocessedRings {
     let mut fully_within_mask = Vec::<Ring>::new();
     let mut partially_within_mask = Vec::<Ring>::new();
@@ -197,6 +209,21 @@ fn rings_to_polygons<I>(outer_rings: I, inner_rings: I) -> Vec<Polygon>
         .collect()
 }
 
+/// Crop the given Polygon, producing new outer rings.
+///
+/// This uses the [Weiler–Atherton clipping
+/// algorithm](https://en.wikipedia.org/wiki/Weiler%E2%80%93Atherton_clipping_algorithm),
+/// with simplifications:
+///
+/// * We assume all the polygon's rings straddle the clip mask. When we clip,
+///   we'll produce one or more outer rings and _zero_ holes: each of the input
+///   holes will become part of the output outer rings, and there's no way to
+///   produce a new hole because the clip mask is a rectangle.
+///   (TODO: better proof?)
+fn clip_polygon(_polygon: Polygon, _mask: &ClipMask) -> Vec<Ring> {
+    vec![]
+}
+
 /// Clips a Region so that all Points are inside the given ClipMask.
 ///
 /// This uses the [Weiler–Atherton clipping
@@ -205,7 +232,7 @@ fn rings_to_polygons<I>(outer_rings: I, inner_rings: I) -> Vec<Polygon>
 pub fn clip_region<Data>(region: Region<Data>, mask: &ClipMask) -> Region<Data> {
     let Region { data, outer_rings, inner_rings } = region;
 
-    let (fast_outer_rings, slow_outer_rings): (Vec<Ring>, Vec<Ring>) = {
+    let (mut fast_outer_rings, slow_outer_rings): (Vec<Ring>, Vec<Ring>) = {
         let t = find_unprocessed_rings(&outer_rings[..], mask);
         (t.fully_within_mask, t.partially_within_mask)
     };
@@ -215,11 +242,13 @@ pub fn clip_region<Data>(region: Region<Data>, mask: &ClipMask) -> Region<Data> 
         (t.fully_within_mask, t.partially_within_mask)
     };
 
-    let _polygons = rings_to_polygons(slow_outer_rings, slow_inner_rings);
+    let polygons = rings_to_polygons(slow_outer_rings, slow_inner_rings);
+    let mut outer_rings: Vec<Ring> = polygons.into_iter().flat_map(|p| clip_polygon(p, mask)).collect();
+    outer_rings.append(&mut fast_outer_rings);
 
     Region {
         data: data,
-        outer_rings: fast_outer_rings.into_boxed_slice(),
+        outer_rings: outer_rings.into_boxed_slice(),
         inner_rings: fast_inner_rings.into_boxed_slice(),
     }
 }

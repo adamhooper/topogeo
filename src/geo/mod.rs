@@ -228,7 +228,7 @@ impl Ring {
 }
 
 #[derive(Debug)]
-pub struct Geography<Data> {
+pub struct Geometry<Data> {
     regions: Box<[Region<Data>]>,
 }
 

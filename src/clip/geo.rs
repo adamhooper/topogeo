@@ -209,6 +209,311 @@ fn rings_to_polygons<I>(outer_rings: I, inner_rings: I) -> Vec<Polygon>
         .collect()
 }
 
+/// Vertex tagged with Weiler-Atherton info.
+///
+/// A deviation from the algorithm: we _omit_ all vertexes that aren't within
+/// the clip mask. The algorithm includes them so you can use those extraneous
+/// points to make up the complementary set of polygons. We don't need that. So
+/// we don't even tag whether a point is inside or outside the mask: if it's
+/// in memory, it's inside.
+#[derive(Clone,Copy,Debug)]
+struct WeilerAthertonSubjectVertex {
+    point: Point,
+    next_i: usize, // follow the polygon
+    clip_vertex_i: Option<usize>, // link to this point on the clip polygon
+}
+
+#[derive(Clone,Copy,Debug)]
+struct WeilerAthertonClipVertex {
+    point: Point,
+    subject_vertex_i: usize, // link to this point on the subject polygon
+}
+
+fn find_first_index_of_point_inside_clip_mask(ring: &Vec<Point>, clip_mask: &ClipMask) -> usize {
+    match ring.iter().position(|&point| clip_mask.test(&point) == ClipLocation::Inside) {
+        Some(i) => { return i; }
+        None => { unreachable!("Ring {:?} never enters clip mask {:?}", ring, clip_mask); }
+    }
+}
+
+fn rotate_ring_until_first_point_is_inside_clip_mask(ring: &Vec<Point>, mask: &ClipMask) -> Vec<Point> {
+    let i = find_first_index_of_point_inside_clip_mask(ring, &mask);
+
+    if i == 0 {
+        return ring.clone();
+    } else {
+        let mut ret: Vec<Point> = vec![];
+        ret.extend_from_slice(&ring[i .. ]);
+        ret.extend_from_slice(&ring[1 .. i + 1]); // nix ring[0], and double up ring[i].
+        return ret;
+    }
+}
+
+/// Returns the vertexes of interest to the Weiler-Atherton algorithm.
+///
+/// Vertexes _outside_ the clip mask are omitted. That deviates from the
+/// algorithm, but we really don't need them.
+///
+/// Vertexes _on_ the clip mask are tricky: we treat them as either inside or
+/// outside. Assuming no extraneous vertexes, there will only ever be one or two
+/// in a row. Here are all the paths this algorithm can take:
+///
+/// * in, ON EDGE, in: this is an inside vertex. Add it to the subject vertex
+///   list.
+/// * out, ON EDGE, out: this is an outside vertex. Ignore it.
+/// * in, ON EDGE, out: this is an outgoing vertex. Add it to the subject and
+///   clip vertex lists.
+/// * out, ON EDGE, in: this is an incoming vertex. Add it to the subject and
+///   clip vertex lists.
+/// * in, ON EDGE, on edge, in: this is an inside vertex. Add it to the subject
+///   vertex list, and treat it as "in" when handling the next point.
+/// * in, ON EDGE, on edge, out: this is an outgoing vertex. Add it to the
+///   subject and clip vertex lists, and treat it as "out" when handling the
+///   next point.
+/// * out, ON EDGE, on edge, in: this is an outside vertex. Ignore it, and treat
+///   it as "out" when handling the next point. (The next point will be an
+///   incoming vertex.)
+/// * out, ON EDGE, on edge, out: this is an outside vertex. Ignore it, and
+///   treat it as "out" when handling the next point.
+/// * in, ON EDGE, on edge, on edge; out, ON EDGE, on edge, on edge: this is
+///   an invalid polygon, because the point after this one is extraneous.
+///
+/// The Weiler-Atherton algorithm doesn't explicitly mention on-edge vertices.
+/// It seems to imply all this, though.
+///
+/// The other interesting bit: since we're building a linked list (essentially),
+/// we don't want to add the last point -- since it's equal to the first point.
+/// Instead, we want to set next_i==0 on the point before it. The one exception
+/// is when the second-last point on the ring is outside. (The last point is
+/// always inside: we rotate to make sure.) Then we have to add an extra point.
+fn ring_to_weiler_atherton_vertexes(ring: &Vec<Point>, clip_mask: &ClipMask) -> (Vec<WeilerAthertonSubjectVertex>, Vec<WeilerAthertonClipVertex>) {
+    let mut subject_vertexes: Vec<WeilerAthertonSubjectVertex> = vec![];
+    let mut clip_vertexes: Vec<WeilerAthertonClipVertex> = vec![];
+
+    let rotated_ring = rotate_ring_until_first_point_is_inside_clip_mask(ring, &clip_mask);
+
+    let mut was_inside = true;
+
+    let point_iter = rotated_ring.iter().peekable();
+    let final_i = rotated_ring.len() - 1;
+
+    for (i, &point) in point_iter.clone().enumerate() {
+        match (was_inside, clip_mask.test(&point)) {
+            (true, ClipLocation::Inside) => {
+                if i == final_i {
+                    // do nothing. This point is equal to the first point, which
+                    // is already in subject_vertexes -- and the previous point
+                    // already points to it through next_i==0.
+                } else if i == final_i - 1 {
+                    // The next point is the final point, which is the same as
+                    // the first point. Both are Inside. So just set next_i == 0.
+                    subject_vertexes.push(WeilerAthertonSubjectVertex {
+                        point: point,
+                        next_i: 0,
+                        clip_vertex_i: None,
+                    });
+                } else {
+                    let subject_vertex = WeilerAthertonSubjectVertex {
+                        point: point,
+                        next_i: subject_vertexes.len() + 1,
+                        clip_vertex_i: None,
+                    };
+                    subject_vertexes.push(subject_vertex);
+                }
+            }
+            (true, ClipLocation::Outside) => {
+                // We know i != final_i, and i != 0, because final_i is Inside.
+                // If i == final_i - 1, let's handle this in the next case: the
+                // (false, Inside) case on the next point.
+                let intersection_point = clip_mask.intersect(&rotated_ring[i - 1], &point);
+
+                // Create both vertexes, THEN push them to the vecs. These len()
+                // calls would give different results if we created and pushed
+                // at the same time.
+                let subject_vertex = WeilerAthertonSubjectVertex {
+                    point: intersection_point,
+                    next_i: subject_vertexes.len() + 1,
+                    clip_vertex_i: Some(clip_vertexes.len()),
+                };
+                let clip_vertex = WeilerAthertonClipVertex {
+                    point: intersection_point,
+                    subject_vertex_i: subject_vertexes.len(),
+                };
+                subject_vertexes.push(subject_vertex);
+                clip_vertexes.push(clip_vertex);
+
+                was_inside = false;
+            }
+            (false, ClipLocation::Inside) => {
+                // We know i != 0
+                let intersection_point = clip_mask.intersect(&rotated_ring[i - 1], &point);
+
+                // Create both vertexes, THEN push them.
+                let subject_vertex = WeilerAthertonSubjectVertex {
+                    point: intersection_point,
+                    next_i: if i == final_i { 0 } else { subject_vertexes.len() + 1 },
+                    clip_vertex_i: Some(clip_vertexes.len()),
+                };
+                let clip_vertex = WeilerAthertonClipVertex {
+                    point: intersection_point,
+                    subject_vertex_i: subject_vertexes.len(),
+                };
+                subject_vertexes.push(subject_vertex);
+                clip_vertexes.push(clip_vertex);
+
+                if i != final_i {
+                    let subject_vertex = WeilerAthertonSubjectVertex {
+                        point: point,
+                        next_i: if i == final_i - 1 { 0 } else { subject_vertexes.len() + 1 },
+                        clip_vertex_i: None,
+                    };
+                    subject_vertexes.push(subject_vertex);
+                }
+
+                was_inside = true;
+            }
+            (false, ClipLocation::Outside) => {
+                // Outside point. Useless.
+            }
+            (true, ClipLocation::OnEdge) => {
+                let next_is_inside = point_iter
+                    .clone()
+                    .map(|p| clip_mask.test(p))
+                    .find(|loc| *loc != ClipLocation::OnEdge)
+                    == Some(ClipLocation::Inside);
+                if next_is_inside {
+                    // this is an inside vertex
+                    let subject_vertex = WeilerAthertonSubjectVertex {
+                        point: point,
+                        next_i: subject_vertexes.len() + 1,
+                        clip_vertex_i: None,
+                    };
+                    subject_vertexes.push(subject_vertex);
+                } else {
+                    // this is an outgoing vertex
+                    let subject_vertex = WeilerAthertonSubjectVertex {
+                        point: point,
+                        next_i: subject_vertexes.len() + 1,
+                        clip_vertex_i: Some(clip_vertexes.len()),
+                    };
+                    let clip_vertex = WeilerAthertonClipVertex {
+                        point: point,
+                        subject_vertex_i: subject_vertexes.len(),
+                    };
+                    subject_vertexes.push(subject_vertex);
+                    clip_vertexes.push(clip_vertex);
+
+                    was_inside = false;
+                }
+            }
+            (false, ClipLocation::OnEdge) => {
+                let next_is_inside = point_iter
+                    .clone()
+                    .map(|p| clip_mask.test(p))
+                    .find(|loc| *loc != ClipLocation::OnEdge)
+                    == Some(ClipLocation::Inside);
+
+                if next_is_inside {
+                    // this is an incoming vertex
+                    let subject_vertex = WeilerAthertonSubjectVertex {
+                        point: point,
+                        next_i: if i == final_i - 1 { 0 } else { subject_vertexes.len() + 1 },
+                        clip_vertex_i: Some(clip_vertexes.len()),
+                    };
+                    let clip_vertex = WeilerAthertonClipVertex {
+                        point: point,
+                        subject_vertex_i: subject_vertexes.len(),
+                    };
+                    subject_vertexes.push(subject_vertex);
+                    clip_vertexes.push(clip_vertex);
+
+                    was_inside = true;
+                } else {
+                    // This is an outside vertex. Ignore it.
+                }
+            }
+        }
+    }
+
+    return (subject_vertexes, clip_vertexes);
+}
+
+fn polygon_to_weiler_atherton_vertexes(polygon: &Polygon, clip_mask: &ClipMask) -> (Vec<WeilerAthertonSubjectVertex>, Vec<WeilerAthertonClipVertex>) {
+    let (mut subject_vertexes, mut clip_vertexes) = ring_to_weiler_atherton_vertexes(&polygon.main_contour, &clip_mask);
+
+    for ref ring in polygon.hole_contours.iter() {
+        let (ring_subject_vertexes, ring_clip_vertexes) = ring_to_weiler_atherton_vertexes(&ring, &clip_mask);
+
+        let subject_i0 = subject_vertexes.len();
+        let clip_i0 = clip_vertexes.len();
+
+        for &subject_vertex in ring_subject_vertexes.iter() {
+            subject_vertexes.push(WeilerAthertonSubjectVertex {
+                point: subject_vertex.point,
+                next_i: subject_vertex.next_i + subject_i0,
+                clip_vertex_i: subject_vertex.clip_vertex_i.map(|i| i + clip_i0),
+            });
+        }
+        for &clip_vertex in ring_clip_vertexes.iter() {
+            clip_vertexes.push(WeilerAthertonClipVertex {
+                point: clip_vertex.point,
+                subject_vertex_i: clip_vertex.subject_vertex_i + subject_i0,
+            });
+        }
+    }
+
+    assert!(clip_vertexes.len() % 2 == 0);
+
+    return (subject_vertexes, clip_vertexes);
+}
+
+/// Return the Ring that Weiler-Atherton produces starting at clip_vertex_i,
+/// plus all the incoming clip vertexes it visits.
+fn follow_clip_ring(subject_vertexes: &Vec<WeilerAthertonSubjectVertex>, clip_vertexes: &Vec<WeilerAthertonClipVertex>, first_clip_vertex_i: usize) -> (Ring, Vec<usize>) {
+    let mut points: Vec<Point> = vec![];
+    let mut visited_clip_vertex_is: Vec<usize> = vec![];
+
+    let mut clip_vertex_i = first_clip_vertex_i;
+    loop {
+        visited_clip_vertex_is.push(clip_vertex_i);
+
+        let clip_vertex = clip_vertexes[clip_vertex_i];
+        let mut subject_vertex_i = clip_vertex.subject_vertex_i;
+
+        // Add all subject-vertex points until we reach the next clip vertex
+        // (which we add as well).
+        loop {
+            let subject_vertex = subject_vertexes[subject_vertex_i];
+            points.push(subject_vertex.point);
+
+            if let Some(outgoing_clip_vertex_i) = subject_vertex.clip_vertex_i {
+                // Beware: the first point matches this if-statement. Ignore it.
+                if outgoing_clip_vertex_i != clip_vertex_i {
+                    // This is an intersection vertex: this run of
+                    // subject-vertex points is done. Move to the next incoming
+                    // vertex, which is always outgoing+1.
+                    assert!(outgoing_clip_vertex_i % 2 == 0);
+                    clip_vertex_i = outgoing_clip_vertex_i + 1;
+                    break;
+                }
+            }
+
+            // This is an inside vertex. Move on to the next one.
+            subject_vertex_i = subject_vertex.next_i;
+        }
+
+        if clip_vertex_i == first_clip_vertex_i {
+            let first_point = points[0];
+            points.push(first_point);
+            break;
+        }
+    }
+
+    let ring = Ring::Points(points.into_boxed_slice());
+
+    return (ring, visited_clip_vertex_is);
+}
+
 /// Crop the given Polygon, producing new outer rings.
 ///
 /// This uses the [Weiler–Atherton clipping
@@ -220,8 +525,39 @@ fn rings_to_polygons<I>(outer_rings: I, inner_rings: I) -> Vec<Polygon>
 ///   holes will become part of the output outer rings, and there's no way to
 ///   produce a new hole because the clip mask is a rectangle.
 ///   (TODO: better proof?)
-fn clip_polygon(_polygon: Polygon, _mask: &ClipMask) -> Vec<Ring> {
-    vec![]
+fn clip_polygon(polygon: &Polygon, clip_mask: &ClipMask) -> Vec<Ring> {
+    let (subject_vertexes, clip_vertexes) = polygon_to_weiler_atherton_vertexes(&polygon, &clip_mask);
+    let mut ret: Vec<Ring> = vec![];
+
+    // clip_vertexes is ordered [ outbound point; inbound point;
+    // outbound point; inbound point; ... ] (where "inbound" here means,
+    // "entering the clip mask" -- i.e., beginning of a Ring we want).
+    //
+    // visited_clip_vertexes will index into only the inbound points. So
+    // if visited_clip_vertexes[i] == false, then clip_vertexes[i * 2 + 1] is
+    // not visited.
+    let mut visited_clip_vertexes = vec![ false; clip_vertexes.len() / 2 ];
+
+    loop {
+        // Pick an intersection vertex that points outwards.
+        let maybe_unvisited_clip_vertex_i = visited_clip_vertexes.iter()
+            .position(|visited| !visited)
+            .map(|i| i * 2 + 1);
+        match maybe_unvisited_clip_vertex_i {
+            None => { return ret; }
+            Some(clip_vertex_i) => {
+                // Grab a ring by following all vertexes.
+                let (ring, visited_clip_vertex_is) = follow_clip_ring(&subject_vertexes, &clip_vertexes, clip_vertex_i);
+                ret.push(ring);
+
+                // Mark all vertexes that intersect the clip mask as visited.
+                for visited_clip_vertex_i in visited_clip_vertex_is {
+                    assert!(visited_clip_vertex_i % 2 == 1);
+                    visited_clip_vertexes[(visited_clip_vertex_i - 1) / 2] = true;
+                }
+            }
+        }
+    }
 }
 
 /// Clips a Region so that all Points are inside the given ClipMask.
@@ -243,7 +579,7 @@ pub fn clip_region<Data>(region: Region<Data>, mask: &ClipMask) -> Region<Data> 
     };
 
     let polygons = rings_to_polygons(slow_outer_rings, slow_inner_rings);
-    let mut outer_rings: Vec<Ring> = polygons.into_iter().flat_map(|p| clip_polygon(p, mask)).collect();
+    let mut outer_rings: Vec<Ring> = polygons.into_iter().flat_map(|p| clip_polygon(&p, mask)).collect();
     outer_rings.append(&mut fast_outer_rings);
 
     Region {
@@ -414,6 +750,33 @@ mod test {
                 vec![ Ring::Points(outer.into_boxed_slice()) ],
                 vec![ Ring::Points(inner_cw.into_boxed_slice()) ]
             )
+        );
+    }
+
+    #[test]
+    fn rotate_ring_until_first_point_is_inside_clip_mask_first_is_inside() {
+        let points = vec![ Point(1, 0), Point(2, 0), Point(1, 1), Point(1, 0) ];
+        let clip_mask = ClipMask::MinX(0);
+        assert_eq!(points, rotate_ring_until_first_point_is_inside_clip_mask(&points, &clip_mask));
+    }
+
+    #[test]
+    fn rotate_ring_until_first_point_is_inside_clip_mask_first_is_outside() {
+        let points = vec![ Point(1, 0), Point(3, 0), Point(1, 1), Point(1, 0) ];
+        let clip_mask = ClipMask::MinX(2);
+        assert_eq!(
+            vec![ Point(3, 0), Point(1, 1), Point(1, 0), Point(3, 0) ],
+            rotate_ring_until_first_point_is_inside_clip_mask(&points, &clip_mask)
+        );
+    }
+
+    #[test]
+    fn rotate_ring_until_first_point_is_inside_clip_mask_first_is_on_edge() {
+        let points = vec![ Point(1, 0), Point(3, 0), Point(1, 1), Point(1, 0) ];
+        let clip_mask = ClipMask::MinX(1);
+        assert_eq!(
+            vec![ Point(3, 0), Point(1, 1), Point(1, 0), Point(3, 0) ],
+            rotate_ring_until_first_point_is_inside_clip_mask(&points, &clip_mask)
         );
     }
 }

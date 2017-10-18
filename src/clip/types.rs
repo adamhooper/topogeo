@@ -4,6 +4,7 @@ use geo::Point;
 ///
 /// Each clip operation works along one axis: either the X axis or the Y
 /// axis.
+#[derive(Debug)]
 pub enum ClipMask {
     MinX(u32),
     MaxX(u32),

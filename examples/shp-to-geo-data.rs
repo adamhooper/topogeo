@@ -7,6 +7,8 @@ use std::path::PathBuf;
 use std::process;
 use topogeo::read::shapefile;
 use topogeo::topology;
+use topogeo::clip;
+use topogeo::geo;
 
 fn print_topology_description<Data>(topology: &topology::Topology<Data>) {
     let mut n_outer_rings = 0;
@@ -52,15 +54,13 @@ fn main() {
     args.next();
     let path = PathBuf::from(args.next().unwrap());
 
-    let mut builder = topology::TopologyBuilder::new();
-
-    match shapefile::open_windows1252(&path) {
+    let regions: Vec<geo::Region<shapefile::DbfRecord>> = match shapefile::open_windows1252(&path) {
         Err(err) => {
             writeln!(&mut io::stderr(), "{}", err).unwrap();
             process::exit(1);
         }
         Ok(mut reader) => {
-            let mut n_regions: usize = 0;
+            let mut regions: Vec<geo::Region<shapefile::DbfRecord>> = vec!();
 
             for region_result in shapefile::ShapefileGeoIterator::new(&mut reader) {
                 match region_result {
@@ -69,16 +69,35 @@ fn main() {
                         process::exit(1);
                     }
                     Ok(region) => {
-                        builder.add_region(region);
-                        n_regions += 1;
+                        regions.push(region);
                     }
                 }
             }
 
-            println!("Read {} regions", n_regions);
+            regions
         }
-    }
+    };
 
+    println!("Read {} regions", regions.len());
+
+    let clip_mask = clip::ClipMask::MinX(1u32 << 31);
+    let clipped_regions: Vec<_> = regions
+        .into_iter()
+        .map(|region| clip::clip_region(region, &clip_mask))
+        .filter(|region| region.outer_rings.len() > 0)
+        .collect();
+    println!("Clipped topology, so now there are {} regions", clipped_regions.len());
+
+    let clip_mask2 = clip::ClipMask::MinY(1u32 << 31);
+    let clipped_regions2: Vec<_> = clipped_regions
+        .into_iter()
+        .map(|region| clip::clip_region(region, &clip_mask2))
+        .filter(|region| region.outer_rings.len() > 0)
+        .collect();
+    println!("Clipped again, so now there are {} regions", clipped_regions2.len());
+
+    let mut builder = topology::TopologyBuilder::new();
+    for region in clipped_regions2 { builder.add_region(region) }
     let topology = builder.into_topology();
     println!("Formed initial topology:");
     print_topology_description(&topology);
@@ -86,8 +105,4 @@ fn main() {
     let normalized = topogeo::normalize(&topology);
     println!("Normalized topology:");
     print_topology_description(&normalized);
-
-    //let clipped = clip::clip_topology(&normalized, &clip::ClipMask::MinX(1u32 << 31));
-    //println!("Clipped topology:");
-    //print_topology_description(&clipped);
 }
